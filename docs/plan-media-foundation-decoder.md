@@ -308,10 +308,7 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   `aarch64-pc-windows-msvc`. A DLL loads only into a process of its own
   architecture. Phase 0 records which `wmplayer.exe` (x64, ARM64, or 32-bit
   x86) the Start-menu shortcut starts on each. An `i686` build is added only
-  if it turns out to be the one users get. (Measured: classic Windows Media
-  Player on a Windows on ARM PC is 32-bit x86 only, so none of the 64-bit
-  builds can be loaded into it. The target is the 64-bit players, FluentFin
-  first, so that is left alone.)
+  if it turns out to be the one users get.
 - **D9. Machine-wide registration, by an administrator.** `DllRegisterServer`
   / `DllUnregisterServer` write and remove the COM class and call
   `MFTRegister` / `MFTUnregister`, so `regsvr32` works. `install.ps1` wraps
