@@ -2,3 +2,4 @@
 # keep a Windows checkout (core.autocrlf) from turning it into CRLF.
 harletty/tests/fixtures/*.atmos text eol=lf
 harletty/tests/fixtures/*.sha256 text eol=lf
+harletty/tests/fixtures/*.atmos.metadata text eol=lf
