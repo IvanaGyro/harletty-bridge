@@ -504,10 +504,10 @@ Changed:
   `CodecQuery` in a desktop process (F11, partly verified).
 - On a desktop (Windows ARM64) the WinRT `MediaPlayer` instantiated the
   registered stub for a TrueHD MKV, ahead of Windows' converter.
-- The stub and the probe were throwaway. Their code is kept on the branch
-  `feat/mf-phase0-tools` (pull request 2) and is not part of `dev/wmp`;
-  Phase 1 does not depend on it. Rebuild them from the descriptions below
-  only if a later question needs them.
+- The stub and the probe were throwaway and are not part of `dev/wmp`. Their
+  code, with the CI workflow that ran them, is saved on the branch
+  `archive/mf-phase0-tools`; Phase 1 does not depend on it. Use it, or the
+  descriptions below, only if a later question needs them.
 - Playback with the stub stalled at about 0.8 s. The first suspect is the
   stub's duration fallback (100 ms of silence for every input sample that has
   no duration, which TrueHD blocks do not): the real transform places each

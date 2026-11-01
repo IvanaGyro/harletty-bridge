@@ -4,6 +4,12 @@ Results of the questions in `docs/plan-media-foundation-decoder.md`, Phase 0.
 Each entry says where it was measured. Entries marked **desktop** still need a
 person at a Windows PC and are open.
 
+The tools behind these numbers (a stub decoder that plays silence, a player
+probe, and the CI workflow that ran them) are not part of `dev/wmp`. They are
+saved on the branch `archive/mf-phase0-tools` (`harletty_mf_stub.dll`,
+`mf-player-probe.exe`, `.github/workflows/windows-mf-phase0.yml`) if a later
+question needs them.
+
 ## Measured in CI (`windows-mf-phase0.yml`)
 
 Run 41318298761 (commit `7f08a30`), on the hosted `windows-11-arm` (arm64)
