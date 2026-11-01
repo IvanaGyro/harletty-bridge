@@ -55,14 +55,23 @@ engine behind `liborender` that mpv-omniphony uses. The MFT only adapts
 Media Foundation's sample flow to that engine. It is the Media Foundation
 counterpart of mpv's `ad_orender`.
 
+Whether Windows' built-in WinRT player can load the same DLL is an open
+question, and Phase 0 answers it (step 4) before anything is built on it. That
+player is `Windows.Media.Playback.MediaPlayer`, behind `MediaPlayerElement`.
+It is the default engine of the FluentFin Jellyfin client (F13) and the engine
+of the Media Player app. If it can, FluentFin becomes a target alongside WMP.
+
 ### Non-goals
 
 - **The new "Media Player" app** (the Store app, `Microsoft.ZuneMusic`), and
-  "Films & TV". They load only in-box decoders and Store media extensions. A
-  decoder installed by registration is not used: see F2. A Store media
-  extension needs the restricted `inProcessMediaExtension` capability, which
-  third parties cannot obtain (F3). This stays out of scope unless Microsoft
-  grants the capability.
+  "Films & TV", are not promised.
+  - A decoder installed by registration is not used by the Media Player app
+    (F2).
+  - An *in-process* Store media extension needs a restricted capability that
+    third parties cannot obtain (F3).
+  - One documented route is left, an *out-of-process* (app-service) media
+    extension (F12). Phase 0 step 4 tests it, and only if it works do these
+    apps come into scope.
 - **DirectShow filters.** WMP can use DirectShow for other formats, but MKV
   playback in WMP goes through Media Foundation (verified in Phase 0).
 - **Bitstream passthrough** to an AV receiver. Windows already passes through
@@ -102,14 +111,16 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   Session apps loaded it, but the Media Player app did not load the DLL at all
   (Microsoft Q&A 2028133,
   <https://learn.microsoft.com/en-us/answers/questions/2028133/register-audio-codec-imftransform-to-be-seen-in-me>).
-- **F3. Store media extensions are closed to third parties.** A codec packaged
-  for the Store declares `uap4:MediaCodec` and the restricted
-  `inProcessMediaExtension` capability. A package that declares it fails to
-  install outside Microsoft's approval path, even sideloaded as administrator
-  (Microsoft Q&A 5769519,
+- **F3. In-process Store media extensions are closed to third parties.** A
+  codec packaged for the Store declares `uap4:MediaCodec`. To load in the
+  player's own process (`wincap3:ActivatableClassId` / `wincap3:Path`), it
+  also needs the restricted `inProcessMediaExtension` capability. A package
+  that declares it fails to install outside Microsoft's approval path, even
+  sideloaded as administrator (Microsoft Q&A 5769519,
   <https://learn.microsoft.com/en-us/answers/questions/5769519/how-to-develop-custom-decoder-media-foundation-tra>).
   Microsoft's own FFmpeg-based extension shows that packaging, as a reference
-  only: <https://github.com/pl4nty/microsoft-web-media-extensions>.
+  only: <https://github.com/pl4nty/microsoft-web-media-extensions>. The
+  out-of-process variant is F12.
 - **F4. No in-box source exposes IAMF.** The MKV table has no IAMF codec id
   (its `A_OPUS` row is plain Opus, not IAMF).
 - **F5. Decoder preference cannot be forced machine-wide.**
@@ -162,6 +173,59 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   accept in-process root modules, but `from_paths` does not take them. So
   linking the bridges into one file needs a new upstream constructor
   (Phase 5).
+
+- **F11. The WinRT player has more codec sources than WMP, and which apply to
+  a desktop process is undocumented.** `Windows.Media.Playback.MediaPlayer`
+  can take a decoder from four sources:
+  - the in-box MFTs;
+  - decoders the app itself registers with
+    `MediaExtensionManager.RegisterAudioDecoder(activatableClassId,
+    inputSubtype, outputSubtype)`. These are local to that app and live as
+    long as its `MediaExtensionManager`
+    (<https://learn.microsoft.com/en-us/uwp/api/windows.media.mediaextensionmanager>);
+  - Store media extensions, in-process (F3) or app-service (F12);
+  - possibly the MFTs registered machine-wide with `MFTRegister`.
+
+  No Microsoft document says whether the WinRT player, in a full-trust
+  desktop process, takes the last of these. The Media Player app, a
+  sandboxed Store app, does not (F2). `MFTEnumEx` has flags no page explains:
+  `MFT_ENUM_FLAG_UNTRUSTED_STOREMFT` (0x400), and
+  `..._SORTANDFILTER_APPROVED_ONLY` and `..._WEB_ONLY` (and `_EDGEMODE`)
+  (<https://learn.microsoft.com/en-us/windows/win32/api/mfapi/ne-mfapi-_mft_enum_flag>).
+  They suggest the WinRT stack enumerates a filtered set. *Verify* in
+  Phase 0, step 4.
+- **F12. A Store media extension can run out of process, in an app service.**
+  `uap4:MediaCodec` has an optional `AppServiceName`, "the app service that is
+  launched as the codec"
+  (<https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap4-mediacodec>).
+  The app service's background task hands its decoder to the media stack with
+  `MediaExtensionManager.RegisterMediaExtensionForAppService(extension,
+  connection)`
+  (<https://learn.microsoft.com/en-us/uwp/api/windows.media.mediaextensionmanager.registermediaextensionforappservice>).
+  `CodecQuery` reports such a codec with `CodecInfo.IsTrusted = false`,
+  meaning it "runs in a separate app service" rather than in the app's
+  process
+  (<https://learn.microsoft.com/en-us/uwp/api/windows.media.core.codecinfo.istrusted>).
+  This variant does not need `inProcessMediaExtension`. No public sample or
+  third-party codec using it was found, so whether a sideloaded package is
+  accepted, and by which players, is *unverified*.
+- **F13. FluentFin uses Media Foundation in one of its three engines.**
+  FluentFin (Jellyfin client, `insomniachi/FluentFin` at `d44c2e5`) is a
+  WinUI 3 app packaged as MSIX with `runFullTrust` (`FluentFin/
+  Package.appxmanifest`): a full-trust desktop process, not sandboxed like
+  the Media Player app.
+  - Its `MediaPlayerType` setting picks `WindowsMediaPlayer`, the default
+    (`Windows.Media.Playback.MediaPlayer`), `Flyleaf` (FFmpeg) or `Vlc`
+    (libVLC). Only the default can reach an MFT; the other two decode
+    everything themselves.
+  - Its Jellyfin device profile (`FluentFin/WmpDeviceProfileManager.cs`)
+    always declares `truehd`, so the server sends TrueHD in MKV as is. It
+    declares `dts`/`dca` only when `CodecQuery` finds an audio decoder for
+    `CodecSubtypes.AudioFormatDts`, which is `MFAudioFormat_DTS`. Our codec
+    table registers that subtype, so if `CodecQuery` lists our MFT, the
+    server stops transcoding DTS for FluentFin.
+  - Streams the server repackages as HLS carry no TrueHD (not in its HLS
+    codec lists): only direct play of the MKV reaches the decoder.
 
 ## Design decisions
 
@@ -405,6 +469,8 @@ mf-decoder/
   install/mf-config.yaml     # default engine config: render.osc false, no bridge paths
   install/mf.yaml            # default MFT options
 tools/mf-probe/              # Phase 0: prints what MF sources expose (a bin crate, cfg(windows))
+tools/mf-stub-decoder/       # Phase 0: stub MFT (silence) that logs which process loads it
+tools/mf-player-probe/       # Phase 0: MFTEnumEx, CodecQuery and the WinRT MediaPlayer on a file
 scripts/make-mf-fixtures.sh  # Phase 2: wraps the existing raw fixtures into .mkv with ffmpeg
 docs/media-foundation.md     # user documentation (Phase 4)
 docs/media-foundation-findings.md  # Phase 0 results
@@ -412,7 +478,8 @@ docs/media-foundation-findings.md  # Phase 0 results
 
 Changed:
 
-- `Cargo.toml`: add `mf-decoder` and `tools/mf-probe` to `members` only.
+- `Cargo.toml`: add `mf-decoder`, `tools/mf-probe`, `tools/mf-stub-decoder`
+  and `tools/mf-player-probe` to `members` only.
 - `scripts/check-crate-isolation.sh`: add a check
   `harletty-mf-decoder "Media Foundation decoder"` that it does not depend on
   `truehd eac3 dca auro iamf-dec iamf-obu iamf-codecs damf clap indicatif
@@ -425,7 +492,8 @@ Changed:
 
 ### Phase 0: facts and a go/no-go
 
-Settles F1, F5 and D8 on real machines before any MFT code is written.
+Settles F1, F5, F11, F12 and D8 on real machines before any MFT code is
+written.
 
 1. **`tools/mf-probe`**: a small `cfg(windows)` binary using the `windows`
    crate. Given a file, it calls `MFStartup`, then
@@ -457,24 +525,94 @@ Settles F1, F5 and D8 on real machines before any MFT code is written.
       output of each file.
    5. The same for `.mp4` (TrueHD and DTS in MP4) and `.m2ts`, to decide
       which rows the codec table gets.
-4. **(Windows desktop)** A throwaway stub MFT (on a scratch branch, not
-   merged) proves WMP loads a registered decoder. It is the Phase 1 skeleton
-   with `ProcessOutput` returning silence of the input's duration, plus a log
-   line in `DllGetClassObject`. Register it with `regsvr32`.
-   - Check that WMP plays an MKV with TrueHD with the stub loaded:
-     `tasklist /m harletty_mf.dll`, or WMP's Help → About → Technical Support
-     Information under "Other binaries".
-   - Then register it for E-AC-3 too, and record whether WMP picks it or
-     Microsoft's decoder (F5).
+4. **Which players load a registered decoder** (F1, F11, F12). Two small
+   tools, both built by the Windows CI jobs and uploaded with the artifacts so
+   the desktop steps only download them.
+   1. **`tools/mf-stub-decoder`** (library `harletty_mf_stub`, so a
+      `.dll` named `harletty_mf_stub.dll`): a stub MFT, the Phase 1 skeleton with
+      `ProcessOutput` returning silence of the input's duration.
+      - It has its own CLSID, so it never collides with the real one:
+        `{7CB8888B-36DA-4A32-B2F9-99748D739782}`.
+      - It is registered with `regsvr32` for the codec table's default rows,
+        plus E-AC-3 when `HARLETTY_STUB_EAC3=1` is set at registration.
+      - Each of `DllGetClassObject`, `SetInputType` and the first
+        `ProcessOutput` appends one line to `%PUBLIC%\harletty-mf-stub.log`:
+        time, PID, executable path, whether the process is in an AppContainer
+        (`GetTokenInformation(TokenIsAppContainer)`), and the subtype.
+      - A failed write is ignored: a sandboxed process may not be allowed to
+        write there, and that fact is itself a finding (use `tasklist /m`
+        then).
+   2. **`tools/mf-player-probe`**: an unpackaged desktop executable, full
+      trust like FluentFin. Given a file, it prints:
+      1. `MFTEnumEx(MFT_CATEGORY_AUDIO_DECODER, MFT_ENUM_FLAG_ALL |
+         MFT_ENUM_FLAG_SORTANDFILTER, <subtype in>, NULL)`, then the same
+         with `MFT_ENUM_FLAG_UNTRUSTED_STOREMFT`: each MFT's friendly name and
+         CLSID. Does the stub appear?
+      2. `CodecQuery.FindAllAsync(Audio, Decoder, <subtype>)`, the call
+         FluentFin's device profile makes (F13): each codec's display name,
+         subtypes and `IsTrusted`. Does the stub appear?
+      3. `Windows.Media.Playback.MediaPlayer` with
+         `MediaSource.CreateFromUri(file)`, `Play()`, waiting up to 10 s. It
+         reports `MediaOpened` or `MediaFailed` (error, extended HRESULT),
+         whether `PlaybackSession.Position` advances, and whether the stub
+         logged a load from this PID.
+   3. **CI (automatic, no person):** on the `windows-11-arm` runner, which
+      is a Windows 11 client with Media Foundation and administrator rights,
+      `regsvr32` the stub and run the probe on the Phase 2 fixtures.
+      - Parts 1 and 2 answer F11 for desktop processes.
+      - Hosted runners have no audio device, so part 3 may fail with
+        `MF_E_NO_AUDIO_PLAYBACK_DEVICE`, possibly before any decoder is
+        looked up. Record what it reports; the desktop run below decides.
+      - Unregister at the end.
+   4. **(Windows desktop)** With the stub registered, play a TrueHD MKV and
+      a DTS MKV, then fill in this matrix in the findings file (✓/✗, plus
+      the stub log line or the error):
+
+      | Player | Process | Stub loaded? | Listed by `CodecQuery`? | Plays (silence, no error)? |
+      |---|---|---|---|---|
+      | WMP Legacy (`wmplayer.exe`) | desktop | | — | |
+      | `mf-player-probe` (WinRT `MediaPlayer`) | desktop, unpackaged | | | |
+      | FluentFin, engine "Windows Media Player", direct play from Jellyfin | desktop, MSIX full trust | | — | |
+      | Media Player app | AppContainer | | — | |
+
+      - For WMP and FluentFin, also check `tasklist /m harletty_mf_stub.dll`
+        while playing. For WMP, also check Help → About → Technical Support
+        Information under "Other binaries".
+      - Then re-register with E-AC-3 and record, for WMP, whether it picks
+        the stub or Microsoft's decoder (F5).
+   5. **(Windows desktop, only if the WinRT rows are ✗)** The app-service
+      route (F12), time-boxed to two days because no public sample exists:
+      - A sideloaded MSIX (developer mode, self-signed certificate) that
+        declares `uap4:MediaCodec` with `Category="audioDecoder"`,
+        `AppServiceName`, and `uap4:MediaEncodingProperties` for TrueHD in /
+        float out. It also declares the matching `windows.appService`
+        extension, whose background task calls
+        `RegisterMediaExtensionForAppService`.
+      - Record whether it installs, whether `CodecQuery` lists it with
+        `IsTrusted = false`, and which of the four players load it. Also
+        record whether the audio stays in step: decoding happens in another
+        process.
 5. **Go/no-go**, recorded in the findings file:
-   - **Go** if WMP loads the stub for TrueHD or DTS from MKV.
-   - If it does not, stop. Record what was observed and which path WMP took
+   - **WMP: go** if WMP loads the stub for TrueHD or DTS from MKV. If it does
+     not, stop. Record what was observed and which path WMP took
      (DirectShow, or another MF decoder). Revise this plan, for example to
      add a DirectShow filter, before Phase 1.
+   - **FluentFin / WinRT player:**
+     - If it loads the registered stub, add FluentFin to the Goal and to the
+       Phase 2 and Phase 4 desktop checks.
+     - If only the app-service package works, write a separate plan for
+       packaging the decoder that way (D9 stays the WMP route). This one
+       stays as it is.
+     - If neither works, record it here under F11 and keep FluentFin's Flyleaf
+       and VLC engines as the answer for that app (no objects).
 
-Done when `docs/media-foundation-findings.md` answers every question above,
-the codec table in this file is corrected to the observed GUIDs, and the
-go/no-go is "go".
+Done when:
+
+- `docs/media-foundation-findings.md` answers every question above,
+  including the player matrix;
+- the codec table in this file is corrected to the observed GUIDs;
+- F11 and F12 are marked verified or refuted;
+- the WMP go/no-go is "go".
 
 ### Phase 1: crate skeleton, COM plumbing, registration
 
@@ -657,14 +795,17 @@ zips and the clean-machine check passes.
   our own for `.mka`/`.mkv` with IAMF (see Omniphony
   `docs/iamf-matroska-mapping.md`) and for `.thd`/`.dts`/`.eac3`. This is
   large: it is a demuxer.
-- **The new Media Player app:** only through a Store media extension, which
-  needs Microsoft to grant `inProcessMediaExtension` (F3). Out of our
-  control; record any change in Microsoft's policy here.
+- **The new Media Player app:** only through a Store media extension. The
+  in-process kind needs Microsoft to grant `inProcessMediaExtension` (F3),
+  which is out of our control. The app-service kind (F12) is open to us if
+  Phase 0 step 4.5 shows it works, and would get a plan of its own.
 
 ## Verification matrix
 
 | What | Where | Phase |
 |---|---|---|
+| registered stub seen by `MFTEnumEx` / `CodecQuery` in a desktop process | Windows CI (admin) | 0 |
+| which players load the stub: WMP, WinRT `MediaPlayer`, FluentFin, Media Player app | Windows desktop | 0 |
 | codec table, layout generation, clock, config | Linux + Windows CI, unit tests | 1 |
 | registration round trip through `MFTEnumEx` | Windows CI (admin) | 1 |
 | decode + render of the fixtures through `Session` | Linux + Windows CI | 2 |
@@ -679,6 +820,10 @@ zips and the clean-machine check passes.
 
 - **WMP may not take the MF path, or may not load our MFT** (F1 unverified).
   Phase 0's go/no-go exists for this.
+- **The WinRT player may only take packaged codecs** (F11). Then FluentFin's
+  "Windows Media Player" engine cannot use a registered DLL. The fallback is
+  the app-service package (F12), which no public example proves works.
+  Phase 0 step 4 settles it before Phase 1.
 - **Microsoft's Dolby decoder may always win for E-AC-3/AC-3** (F5). That is
   acceptable: D6 makes those codecs opt-in, and objects in E-AC-3 are the
   only loss.
@@ -725,4 +870,19 @@ zips and the clean-machine check passes.
   Q&A 2028133 (Media Player app ignores a registered MFT)
   <https://learn.microsoft.com/en-us/answers/questions/2028133/register-audio-codec-imftransform-to-be-seen-in-me>;
   Q&A 5769519 (`inProcessMediaExtension` is restricted)
-  <https://learn.microsoft.com/en-us/answers/questions/5769519/how-to-develop-custom-decoder-media-foundation-tra>.
+  <https://learn.microsoft.com/en-us/answers/questions/5769519/how-to-develop-custom-decoder-media-foundation-tra>;
+  `_MFT_ENUM_FLAG`
+  <https://learn.microsoft.com/en-us/windows/win32/api/mfapi/ne-mfapi-_mft_enum_flag>;
+  `MediaExtensionManager`
+  <https://learn.microsoft.com/en-us/uwp/api/windows.media.mediaextensionmanager>
+  and `RegisterMediaExtensionForAppService`
+  <https://learn.microsoft.com/en-us/uwp/api/windows.media.mediaextensionmanager.registermediaextensionforappservice>;
+  `uap4:MediaCodec`
+  <https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap4-mediacodec>;
+  `CodecInfo.IsTrusted`
+  <https://learn.microsoft.com/en-us/uwp/api/windows.media.core.codecinfo.istrusted>.
+- FluentFin at `d44c2e5`: `FluentFin/Package.appxmanifest`,
+  `FluentFin/WmpDeviceProfileManager.cs`,
+  `FluentFin/MediaPlayers/WindowsMediaPlayerController.cs`,
+  `FluentFin.Core/Contracts/Services/IMediaPlayerController.cs`
+  (<https://github.com/insomniachi/FluentFin>).
