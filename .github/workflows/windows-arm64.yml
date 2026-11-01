@@ -1,0 +1,76 @@
+name: Windows ARM64
+
+# Build and test on a native Windows ARM64 runner:
+#   - every pull request, whatever its base, on open and on each push to it;
+#   - every push to `main` and `dev/wmp` (a merge into either).
+#
+# Same setup as ci.yml and release.yml: Omniphony is checked out at the ref
+# `.omniphony-ref` names, libopus is built statically for the IAMF plugin, and
+# the C runtime is linked statically (RUSTFLAGS replaces .cargo/config.toml,
+# so +crt-static is repeated here).
+
+on:
+  push:
+    branches: [main, dev/wmp]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-arm64-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-arm64:
+    runs-on: windows-11-arm
+    env:
+      RUSTFLAGS: -D warnings -C target-feature=+crt-static
+    steps:
+      - name: Checkout harletty-bridge
+        uses: actions/checkout@v5
+        with:
+          path: harletty-bridge
+
+      - name: Resolve the Omniphony ref
+        id: omniphony
+        shell: bash
+        run: echo "ref=$(harletty-bridge/scripts/omniphony-ref.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Omniphony (path dependencies)
+        uses: actions/checkout@v5
+        with:
+          repository: mgth/Omniphony
+          ref: ${{ steps.omniphony.outputs.ref }}
+          path: Omniphony
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Show toolchain host
+        run: rustc -vV
+
+      # Sets OPUS_LIB_DIR and OPUS_STATIC for the steps that follow.
+      - name: Build libopus (static)
+        shell: bash
+        run: scripts/build-static-opus.sh
+        working-directory: harletty-bridge
+
+      - name: Build (release)
+        run: cargo build --release --locked -p harletty-dolby-bridge -p harletty-dts-bridge -p harletty-iamf-bridge -p harletty
+        working-directory: harletty-bridge
+
+      - name: Test (release)
+        run: cargo test --release --locked
+        working-directory: harletty-bridge
+
+      # The IAMF family is not a default member: tested on its own.
+      - name: Test IAMF (release)
+        run: cargo test --release --locked -p bridge-family-iamf -p harletty-iamf-bridge
+        working-directory: harletty-bridge
+
+      - name: Check the plugin libraries exist
+        shell: bash
+        run: |
+          for f in dolby dts iamf; do
+            test -f "target/release/harletty_${f}_bridge.dll"
+          done
+        working-directory: harletty-bridge
