@@ -65,6 +65,10 @@ check harletty-dolby-bridge "Dolby plugin" dca auro iamf-dec iamf-obu iamf-codec
 check harletty-dts-bridge "DTS plugin" truehd eac3 iamf-dec iamf-obu iamf-codecs "${cli[@]}"
 check harletty-iamf-bridge "IAMF plugin" truehd eac3 dca auro "${cli[@]}"
 
+# The Media Foundation decoder holds no decoder at all: the decoders are the
+# bridge DLLs, loaded from its own folder at run time (docs/plan-media-foundation-decoder.md, D3).
+check harletty-mf-decoder "Media Foundation decoder" truehd eac3 dca auro iamf-dec iamf-obu iamf-codecs "${cli[@]}"
+
 # The combined bridge (an rlib for the fuzz target, the bench and the kit).
 check harletty-bridge "combined bridge" "${cli[@]}"
 

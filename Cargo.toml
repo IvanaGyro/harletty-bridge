@@ -22,6 +22,7 @@ members = [
     "dca",
     "damf",
     "auro",
+    "mf-decoder",
 ]
 # What a plain `cargo build` / `cargo test` at the root covers: everything but
 # the IAMF family and its plugin, whose Opus path links libopus. Build or test
