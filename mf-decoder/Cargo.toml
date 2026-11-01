@@ -1,0 +1,42 @@
+[package]
+name = "harletty-mf-decoder"
+version = "0.9.0"
+edition = "2024"
+# Links bridge_api, like the plugins: see ../bridge.
+license = "GPL-3.0-or-later"
+description = "harletty-bridge as a Windows Media Foundation audio decoder, for Windows Media Player and other Media Foundation players"
+repository = "https://github.com/harletty/harletty-bridge"
+publish = false
+
+# cdylib: harletty_mf.dll, registered with regsvr32. rlib: what its tests link.
+[lib]
+name = "harletty_mf"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Only for the channel label names a generated speaker layout uses. No decoder
+# crate is a dependency here: the decoders are the bridge DLLs, loaded from
+# this DLL's folder at run time (scripts/check-crate-isolation.sh).
+bridge_api = { version = "0.6.0", path = "../../Omniphony/omniphony-renderer/bridge_api" }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+
+[dev-dependencies]
+# The codec table's input_codec names must be ones the families take.
+bridge-common = { version = "0.9.0", path = "../bridge-common" }
+bridge-family-dolby = { version = "0.9.0", path = "../bridge-family-dolby" }
+bridge-family-dts = { version = "0.9.0", path = "../bridge-family-dts" }
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
