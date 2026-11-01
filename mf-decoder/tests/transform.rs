@@ -59,7 +59,9 @@ fn input_type(codec: usize, rate: u32) -> IMFMediaType {
     }
 }
 
-fn access_unit(bytes: &[u8], pts_hns: i64, discontinuity: bool) -> IMFSample {
+/// One access unit; `pts_hns` is `None` for a sample with no time, which is
+/// what a demuxer gives the pieces of a continuous stream after its first.
+fn access_unit(bytes: &[u8], pts_hns: Option<i64>, discontinuity: bool) -> IMFSample {
     unsafe {
         let sample = MFCreateSample().unwrap();
         let buffer = MFCreateMemoryBuffer(bytes.len() as u32).unwrap();
@@ -69,7 +71,9 @@ fn access_unit(bytes: &[u8], pts_hns: i64, discontinuity: bool) -> IMFSample {
         buffer.Unlock().unwrap();
         buffer.SetCurrentLength(bytes.len() as u32).unwrap();
         sample.AddBuffer(&buffer).unwrap();
-        sample.SetSampleTime(pts_hns).unwrap();
+        if let Some(pts) = pts_hns {
+            sample.SetSampleTime(pts).unwrap();
+        }
         if discontinuity {
             sample
                 .SetUINT32(&MFSampleExtension_Discontinuity, 1)
@@ -138,7 +142,7 @@ fn decode_all(mft: &IMFTransform) -> Vec<Out> {
     let mut out = Vec::new();
     for (i, piece) in DTS_CORE.chunks(PIECE).enumerate() {
         unsafe {
-            mft.ProcessInput(0, &access_unit(piece, i as i64 * 100_000, false), 0)
+            mft.ProcessInput(0, &access_unit(piece, (i == 0).then_some(0), false), 0)
                 .unwrap()
         };
         take_all(mft, &mut out);
@@ -152,7 +156,7 @@ fn decode_all(mft: &IMFTransform) -> Vec<Out> {
 fn feed_until_output(mft: &IMFTransform) -> usize {
     for (i, piece) in DTS_CORE.chunks(PIECE).enumerate() {
         unsafe {
-            mft.ProcessInput(0, &access_unit(piece, i as i64 * 100_000, false), 0)
+            mft.ProcessInput(0, &access_unit(piece, (i == 0).then_some(0), false), 0)
                 .unwrap()
         };
         if unsafe { mft.GetOutputStatus().unwrap() } == MFT_OUTPUT_STATUS_SAMPLE_READY.0 as u32 {
@@ -240,7 +244,7 @@ fn input_is_refused_until_the_output_is_taken() {
         let next = &DTS_CORE[(taken * PIECE).min(DTS_CORE.len() - 1)..];
         assert_eq!(mft.GetInputStatus(0).unwrap(), 0);
         assert_eq!(
-            mft.ProcessInput(0, &access_unit(&next[..1], 0, false), 0)
+            mft.ProcessInput(0, &access_unit(&next[..1], None, false), 0)
                 .unwrap_err()
                 .code(),
             MF_E_NOTACCEPTING
@@ -279,8 +283,12 @@ fn a_discontinuity_flag_restarts_the_stream_without_an_error() {
     let mut sink = Vec::new();
     take_all(&mft, &mut sink);
     unsafe {
-        mft.ProcessInput(0, &access_unit(&DTS_CORE[..PIECE], 500_000_000, true), 0)
-            .unwrap()
+        mft.ProcessInput(
+            0,
+            &access_unit(&DTS_CORE[..PIECE], Some(500_000_000), true),
+            0,
+        )
+        .unwrap()
     };
     take_all(&mft, &mut sink);
 }
@@ -291,7 +299,7 @@ fn garbage_in_is_not_an_error_and_does_not_stop_playback() {
     start(&mft);
     let garbage = vec![0xA5u8; 4096];
     unsafe {
-        mft.ProcessInput(0, &access_unit(&garbage, 0, false), 0)
+        mft.ProcessInput(0, &access_unit(&garbage, Some(0), false), 0)
             .unwrap()
     };
     let mut sink = Vec::new();
