@@ -1,0 +1,94 @@
+name: Windows MF phase 0
+
+# Phase 0 of docs/plan-media-foundation-decoder.md: does a decoder registered
+# machine-wide show up in a desktop process, through MFTEnumEx and through
+# the WinRT CodecQuery that the FluentFin Jellyfin client asks? Builds the
+# stub decoder and the player probe, registers the stub (the hosted runners
+# are administrators), runs the probe, unregisters, and uploads the binaries
+# and the probe's output so the rest of the matrix can be run on a desktop.
+#
+# No Omniphony checkout is needed: neither tool links the decoder crates.
+# Hosted runners have no audio device, so the probe is run without a file; the
+# MediaPlayer step is for a desktop.
+
+on:
+  push:
+    branches: [main, dev/wmp]
+  pull_request:
+    paths:
+      - 'tools/mf-stub-decoder/**'
+      - 'tools/mf-player-probe/**'
+      - '.github/workflows/windows-mf-phase0.yml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-mf-phase0-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phase0:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: arm64, runner: windows-11-arm }
+          - { name: x64, runner: windows-latest }
+    env:
+      RUSTFLAGS: -D warnings -C target-feature=+crt-static
+    steps:
+      - name: Checkout harletty-bridge
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the stub and the probe
+        run: cargo build --release --locked -p harletty-mf-stub -p harletty-mf-player-probe
+
+      - name: Windows version
+        shell: pwsh
+        run: |
+          [System.Environment]::OSVersion.VersionString
+          (Get-CimInstance Win32_OperatingSystem).Caption
+
+      - name: Probe before registering (baseline)
+        shell: pwsh
+        run: target\release\mf-player-probe.exe | Tee-Object -FilePath probe-before.txt
+
+      - name: Register the stub (TrueHD, DTS-HD, DTS)
+        shell: pwsh
+        run: |
+          regsvr32 /s "$PWD\target\release\harletty_mf_stub.dll"
+          if ($LASTEXITCODE -ne 0) { throw "regsvr32 failed: $LASTEXITCODE" }
+
+      - name: Probe with the stub registered
+        shell: pwsh
+        run: target\release\mf-player-probe.exe | Tee-Object -FilePath probe-registered.txt
+
+      - name: Stub log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:PUBLIC 'harletty-mf-stub.log'
+          if (Test-Path $log) { Get-Content $log | Tee-Object -FilePath stub-log.txt } else { 'no log written' | Tee-Object -FilePath stub-log.txt }
+
+      - name: Unregister the stub
+        if: always()
+        shell: pwsh
+        run: regsvr32 /s /u "$PWD\target\release\harletty_mf_stub.dll"
+
+      - name: Upload the tools and the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: harletty-mf-phase0-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/release/harletty_mf_stub.dll
+            target/release/mf-player-probe.exe
+            probe-before.txt
+            probe-registered.txt
+            stub-log.txt
+          retention-days: 30

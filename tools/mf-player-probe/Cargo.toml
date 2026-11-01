@@ -1,0 +1,23 @@
+[package]
+name = "harletty-mf-player-probe"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Phase 0 probe: which Windows media stacks see a registered decoder, and does the WinRT MediaPlayer play a file through it"
+repository = "https://github.com/harletty/harletty-bridge"
+publish = false
+
+[[bin]]
+name = "mf-player-probe"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Core",
+    "Media_Playback",
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+] }

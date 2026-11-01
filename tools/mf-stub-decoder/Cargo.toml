@@ -1,0 +1,26 @@
+[package]
+name = "harletty-mf-stub"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Phase 0 stub: a Media Foundation audio decoder that plays silence and logs which process loads it"
+repository = "https://github.com/harletty/harletty-bridge"
+publish = false
+
+# cdylib: harletty_mf_stub.dll, registered with regsvr32.
+[lib]
+name = "harletty_mf_stub"
+crate-type = ["cdylib"]
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
