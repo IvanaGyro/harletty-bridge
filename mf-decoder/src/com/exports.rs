@@ -19,6 +19,15 @@ pub unsafe extern "system" fn DllGetClassObject(
     if clsid.is_null() || iid.is_null() || object.is_null() {
         return E_POINTER;
     }
+    // The first sign that a process is using the DLL: start the log here, so
+    // it exists even if nothing goes further.
+    super::logger::init(&super::paths::load_config());
+    log::info!(
+        "DllGetClassObject in {:?}",
+        std::env::current_exe()
+            .ok()
+            .map(|p| p.display().to_string())
+    );
     if unsafe { *clsid } != CLSID_DECODER {
         return CLASS_E_CLASSNOTAVAILABLE;
     }

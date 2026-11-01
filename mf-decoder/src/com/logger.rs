@@ -53,7 +53,7 @@ pub fn init(config: &MfConfig) {
             .log_level
             .as_deref()
             .and_then(|text| text.parse().ok())
-            .unwrap_or(LevelFilter::Warn);
+            .unwrap_or(LevelFilter::Info);
         if level == LevelFilter::Off {
             return;
         }

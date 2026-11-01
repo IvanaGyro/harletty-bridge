@@ -26,7 +26,7 @@ pub struct MfConfig {
     /// The codecs to register, by `option` name (`truehd`, `dts`, `eac3`,
     /// `ac3`); the codec table's defaults when absent.
     pub codecs: Option<Vec<String>>,
-    /// `off` … `trace`; `warn` when absent.
+    /// `off` … `trace`; `info` when absent.
     pub log_level: Option<String>,
     /// Where to log; `%LOCALAPPDATA%\harletty\mf\harletty-mf.log` when absent.
     pub log_file: Option<String>,
