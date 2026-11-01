@@ -1,0 +1,4 @@
+# The golden test compares the .atmos fixture byte for byte with LF output;
+# keep a Windows checkout (core.autocrlf) from turning it into CRLF.
+harletty/tests/fixtures/*.atmos text eol=lf
+harletty/tests/fixtures/*.sha256 text eol=lf
