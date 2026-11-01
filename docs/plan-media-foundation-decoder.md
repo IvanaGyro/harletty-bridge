@@ -304,11 +304,18 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     DLL exports, and the registration.
   - A Linux agent can therefore test the whole decode path. Only the COM
     plumbing needs Windows CI.
-- **D8. Architectures:** `x86_64-pc-windows-msvc` and
-  `aarch64-pc-windows-msvc`. A DLL loads only into a process of its own
-  architecture. Phase 0 records which `wmplayer.exe` (x64, ARM64, or 32-bit
-  x86) the Start-menu shortcut starts on each. An `i686` build is added only
-  if it turns out to be the one users get.
+- **D8. Architectures:** `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`
+  and `i686-pc-windows-msvc`. A DLL loads only into a process of its own
+  architecture. **Measured:** on a Windows on ARM PC, classic Windows Media
+  Player has no 64-bit build: `Program Files\Windows Media Player` holds no
+  `wmplayer.exe`, and the one that runs is the 32-bit x86 one, so the decoder
+  must be an x86 DLL for it (registered with `C:\Windows\SysWOW64\regsvr32.exe`,
+  into the 32-bit view). Phase 1 builds all three. The risk for Phase 2 is
+  that the whole stack behind the DLL (`orender_engine`, the bridge plugins,
+  `abi_stable`) must then build and run as 32-bit too; if it cannot, the
+  options are an out-of-process decoder behind a thin 32-bit MFT, or giving up
+  classic WMP on ARM and keeping the 64-bit players (the WinRT `MediaPlayer`,
+  FluentFin).
 - **D9. Machine-wide registration, by an administrator.** `DllRegisterServer`
   / `DllUnregisterServer` write and remove the COM class and call
   `MFTRegister` / `MFTUnregister`, so `regsvr32` works. `install.ps1` wraps
