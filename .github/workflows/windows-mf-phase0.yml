@@ -12,9 +12,10 @@ name: Windows MF phase 0
 # MediaPlayer step is for a desktop.
 
 on:
+  # Any branch, so a phase can be tried before it has a pull request; only
+  # when the tools or this file change. (No pull_request trigger: the push
+  # run already covers the branch's head commit.)
   push:
-    branches: [main, dev/wmp]
-  pull_request:
     paths:
       - 'tools/mf-stub-decoder/**'
       - 'tools/mf-player-probe/**'
@@ -23,7 +24,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: windows-mf-phase0-${{ github.event.pull_request.number || github.ref }}
+  group: windows-mf-phase0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -84,7 +85,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: harletty-mf-phase0-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          name: harletty-mf-phase0-${{ matrix.name }}-${{ github.sha }}
           path: |
             target/release/harletty_mf_stub.dll
             target/release/mf-player-probe.exe
