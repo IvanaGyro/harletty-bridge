@@ -7,7 +7,9 @@ name: Windows MF phase 0
 # are administrators), runs the probe, unregisters, and uploads the binaries
 # and the probe's output so the rest of the matrix can be run on a desktop.
 #
-# No Omniphony checkout is needed: neither tool links the decoder crates.
+# Neither tool links Omniphony or a decoder, but cargo loads the whole
+# workspace, whose other members take bridge_api by path from the sibling
+# checkout: so Omniphony is checked out as in windows-arm64.yml.
 # Hosted runners have no audio device, so the probe is run without a file; the
 # MediaPlayer step is for a desktop.
 
@@ -39,9 +41,27 @@ jobs:
           - { name: x64, runner: windows-latest }
     env:
       RUSTFLAGS: -D warnings -C target-feature=+crt-static
+    defaults:
+      run:
+        working-directory: harletty-bridge
     steps:
       - name: Checkout harletty-bridge
         uses: actions/checkout@v5
+        with:
+          path: harletty-bridge
+
+      - name: Resolve the Omniphony ref
+        id: omniphony
+        shell: bash
+        working-directory: .
+        run: echo "ref=$(harletty-bridge/scripts/omniphony-ref.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Omniphony (path dependencies)
+        uses: actions/checkout@v5
+        with:
+          repository: mgth/Omniphony
+          ref: ${{ steps.omniphony.outputs.ref }}
+          path: Omniphony
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -87,9 +107,9 @@ jobs:
         with:
           name: harletty-mf-phase0-${{ matrix.name }}-${{ github.sha }}
           path: |
-            target/release/harletty_mf_stub.dll
-            target/release/mf-player-probe.exe
-            probe-before.txt
-            probe-registered.txt
-            stub-log.txt
+            harletty-bridge/target/release/harletty_mf_stub.dll
+            harletty-bridge/target/release/mf-player-probe.exe
+            harletty-bridge/probe-before.txt
+            harletty-bridge/probe-registered.txt
+            harletty-bridge/stub-log.txt
           retention-days: 30
