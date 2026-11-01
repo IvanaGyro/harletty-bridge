@@ -184,12 +184,25 @@ mod windows_main {
         }
     }
 
+    /// `file:///C:/dir/name.mkv` with every byte outside the URI's unreserved
+    /// set escaped (except the path's `/` and the drive's `:`), so a `#`, `%`
+    /// or `?` in a name stays part of the path.
+    pub(crate) fn file_uri(path: &str) -> String {
+        let mut uri = String::from("file:///");
+        for byte in path.replace('\\', "/").bytes() {
+            match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                    uri.push(byte as char)
+                }
+                _ => uri.push_str(&format!("%{byte:02X}")),
+            }
+        }
+        uri
+    }
+
     fn play(file: &str) -> Result<()> {
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
-        let uri = Uri::CreateUri(&HSTRING::from(format!(
-            "file:///{}",
-            path.display().to_string().replace('\\', "/")
-        )))?;
+        let uri = Uri::CreateUri(&HSTRING::from(file_uri(&path.display().to_string())))?;
         let source = MediaSource::CreateFromUri(&uri)?;
         let player = MediaPlayer::new()?;
         let (tx, rx) = mpsc::channel::<String>();
@@ -241,5 +254,18 @@ mod windows_main {
             last_position.Duration as f64 / 10_000_000.0
         );
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::file_uri;
+
+        #[test]
+        fn escapes_what_would_end_the_path() {
+            assert_eq!(
+                file_uri(r"C:\samples\track#1 100%.mkv"),
+                "file:///C:/samples/track%231%20100%25.mkv"
+            );
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! `regsvr32` support: the COM class under `HKLM\SOFTWARE\Classes\CLSID`, then
 //! `MFTRegister` so `MFTEnumEx` finds it. Needs an administrator.
 
-use windows::Win32::Foundation::{HMODULE, MAX_PATH};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HMODULE, MAX_PATH};
 use windows::Win32::Media::MediaFoundation::{
     MF_VERSION, MFAudioFormat_Float, MFMediaType_Audio, MFSTARTUP_FULL, MFShutdown, MFStartup,
     MFT_CATEGORY_AUDIO_DECODER, MFT_REGISTER_TYPE_INFO, MFTRegister, MFTUnregister,
@@ -114,11 +114,21 @@ fn input(subtype: &GUID) -> MFT_REGISTER_TYPE_INFO {
     }
 }
 
-/// Idempotent: whatever is missing is skipped.
+/// Idempotent: whatever is already gone is fine, but a failure to remove
+/// something that is there (no administrator rights, say) is reported, so
+/// `regsvr32 /u` does not claim success and leave the decoder installed. Both
+/// removals are tried before the first error is returned.
 pub fn unregister() -> windows::core::Result<()> {
     unsafe {
-        let _ = MFTUnregister(CLSID_STUB);
-        let _ = RegDeleteTreeW(HKEY_LOCAL_MACHINE, &clsid_key());
+        MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
+        let mft = MFTUnregister(CLSID_STUB);
+        let _ = MFShutdown();
+        let key = RegDeleteTreeW(HKEY_LOCAL_MACHINE, &clsid_key());
+        let key = if key == ERROR_FILE_NOT_FOUND {
+            Ok(())
+        } else {
+            key.ok()
+        };
+        mft.and(key)
     }
-    Ok(())
 }
