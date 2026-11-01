@@ -49,7 +49,16 @@ impl OutputClock {
         self.frames_since_anchor = 0;
     }
 
+    /// Start a timeline at `pts_hns` (less `latency_hns`): later blocks placed
+    /// with no timestamp tile on from here.
+    pub fn anchor(&mut self, pts_hns: i64, latency_hns: i64) {
+        self.anchor_hns = pts_hns - latency_hns;
+        self.frames_since_anchor = 0;
+    }
+
     /// The `(start, duration)` in 100 ns units of the next block of `frames`.
+    /// Duration is the difference of two cumulative positions, so a block ends
+    /// exactly where the next starts.
     pub fn place(
         &mut self,
         input_pts_hns: Option<i64>,
@@ -57,8 +66,7 @@ impl OutputClock {
         frames: u64,
     ) -> (i64, i64) {
         if let Some(pts) = input_pts_hns {
-            self.anchor_hns = pts - latency_hns;
-            self.frames_since_anchor = 0;
+            self.anchor(pts, latency_hns);
         }
         let before = frames_to_hns(self.frames_since_anchor, self.rate);
         self.frames_since_anchor += frames;

@@ -308,9 +308,20 @@ impl IMFTransform_Impl for Decoder_Impl {
                     ty.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)?,
                 )
             };
+            // The whole format, not just its headline: what we write is 32-bit
+            // float in the session's layout, so a type that says otherwise
+            // (or leaves these out) does not describe our buffers.
+            let wanted = output_type(session)?;
+            let same = |key: &GUID| {
+                let theirs = unsafe { ty.GetUINT32(key) }.ok();
+                theirs.is_some() && theirs == unsafe { wanted.GetUINT32(key) }.ok()
+            };
             if subtype != MFAudioFormat_Float
                 || rate != session.rate()
                 || channels != session.channels()
+                || !same(&MF_MT_AUDIO_CHANNEL_MASK)
+                || !same(&MF_MT_AUDIO_BITS_PER_SAMPLE)
+                || !same(&MF_MT_AUDIO_BLOCK_ALIGNMENT)
             {
                 return Err(MF_E_INVALIDMEDIATYPE.into());
             }

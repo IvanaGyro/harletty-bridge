@@ -8,7 +8,7 @@
 //! duration, and guessing one (the Phase 0 stub gave every block 100 ms) puts
 //! the timeline far ahead of the audio.
 
-use super::clock::{OutputClock, frames_to_hns, hns_to_frames};
+use super::clock::{OutputClock, hns_to_frames};
 use super::codecs::Codec;
 use super::layout;
 
@@ -89,8 +89,8 @@ impl Session {
             return Vec::new();
         }
         let frames = frames as usize;
-        let from = origin + frames_to_hns(self.emitted_frames, self.rate);
-        let (start_hns, duration_hns) = self.clock.place(Some(from), 0, frames as u64);
+        // The clock was anchored at the origin: blocks tile on from there.
+        let (start_hns, duration_hns) = self.clock.place(None, 0, frames as u64);
         self.emitted_frames += frames as u64;
         vec![Block {
             start_hns,
@@ -103,6 +103,7 @@ impl Session {
     fn start_timeline(&mut self, pts: i64) {
         self.origin_hns = Some(pts);
         self.emitted_frames = 0;
+        self.clock.anchor(pts, 0);
     }
 
     /// End of stream: what is still held. Nothing is, in Phase 1.
@@ -161,6 +162,22 @@ mod tests {
             }
         }
         assert_eq!(frames, hns_to_frames(1000 * 8_333, 48_000));
+    }
+
+    #[test]
+    fn consecutive_blocks_end_where_the_next_starts() {
+        // 40 frames every 8_333 units (not a whole number of units each).
+        let mut s = session();
+        let mut end = None;
+        for i in 0..=2000 {
+            for block in s.push(b"x", Some(i * 8_333)) {
+                if let Some(end) = end {
+                    assert_eq!(block.start_hns, end, "block at input {i}");
+                }
+                end = Some(block.start_hns + block.duration_hns);
+            }
+        }
+        assert!(end.is_some());
     }
 
     #[test]

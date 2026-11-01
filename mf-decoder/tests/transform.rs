@@ -239,3 +239,43 @@ fn drain_with_nothing_held_is_quiet() {
         );
     }
 }
+
+#[test]
+fn an_output_type_that_does_not_describe_our_buffers_is_refused() {
+    let mft = decoder();
+    let offered = start(&mft);
+    let altered = |key: &GUID, value: u32| -> IMFMediaType {
+        unsafe {
+            let ty = MFCreateMediaType().unwrap();
+            offered.CopyAllItems(&ty).unwrap();
+            ty.SetUINT32(key, value).unwrap();
+            ty
+        }
+    };
+    let test_only = MFT_SET_TYPE_TEST_ONLY.0 as u32;
+    unsafe {
+        // The offered type itself is fine.
+        mft.SetOutputType(0, &offered, test_only).unwrap();
+        // Wider samples, another layout, another alignment: all refused.
+        for bad in [
+            altered(&MF_MT_AUDIO_BITS_PER_SAMPLE, 64),
+            altered(&MF_MT_AUDIO_CHANNEL_MASK, 0x7),
+            altered(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 3),
+        ] {
+            assert_eq!(
+                mft.SetOutputType(0, &bad, test_only).unwrap_err().code(),
+                MF_E_INVALIDMEDIATYPE
+            );
+        }
+        // One that leaves the mask out does not say what the channels are.
+        let no_mask = MFCreateMediaType().unwrap();
+        offered.CopyAllItems(&no_mask).unwrap();
+        no_mask.DeleteItem(&MF_MT_AUDIO_CHANNEL_MASK).unwrap();
+        assert_eq!(
+            mft.SetOutputType(0, &no_mask, test_only)
+                .unwrap_err()
+                .code(),
+            MF_E_INVALIDMEDIATYPE
+        );
+    }
+}

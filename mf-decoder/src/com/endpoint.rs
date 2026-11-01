@@ -9,6 +9,7 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+    CoUninitialize,
 };
 
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
@@ -20,11 +21,27 @@ fn mask_for_channels(channels: u16) -> u32 {
     }
 }
 
+/// Balances a successful `CoInitializeEx` (`S_OK` or `S_FALSE`); a failed one
+/// (the thread is already an STA, say) is left alone.
+struct ComGuard(bool);
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
 pub fn speaker_mask() -> Option<u32> {
+    // MTA is what Media Foundation's worker threads use. The interfaces are
+    // released inside `query`, before the guard uninitialises COM.
+    let _com = ComGuard(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
+    query()
+}
+
+fn query() -> Option<u32> {
     unsafe {
-        // MTA is what Media Foundation's worker threads use; a failure here
-        // (already initialised differently) is fine.
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
         let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
