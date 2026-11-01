@@ -20,7 +20,8 @@ struct State {
     output_type: Option<IMFMediaType>,
     /// Time and duration of the input sample waiting for `ProcessOutput`.
     pending: Option<(i64, i64)>,
-    produced_logged: bool,
+    inputs: u64,
+    outputs: u64,
 }
 
 #[implement(IMFTransform)]
@@ -204,6 +205,7 @@ impl IMFTransform_Impl for Stub_Impl {
                 if subtype != MFAudioFormat_Float || rate != RATE || channels != CHANNELS {
                     return Err(MF_E_INVALIDMEDIATYPE.into());
                 }
+                log::line(&format!("SetOutputType ok test_only={test_only}"));
                 if !test_only {
                     state.output_type = Some(ty.clone());
                 }
@@ -257,6 +259,13 @@ impl IMFTransform_Impl for Stub_Impl {
     }
 
     fn ProcessMessage(&self, message: MFT_MESSAGE_TYPE, _: usize) -> windows::core::Result<()> {
+        {
+            let state = self.state.lock().unwrap();
+            log::line(&format!(
+                "ProcessMessage {} (inputs={} outputs={})",
+                message.0, state.inputs, state.outputs
+            ));
+        }
         if message == MFT_MESSAGE_COMMAND_FLUSH {
             self.state.lock().unwrap().pending = None;
         }
@@ -276,6 +285,13 @@ impl IMFTransform_Impl for Stub_Impl {
         // A compressed sample's duration may be unset: fall back to 10 ms.
         let duration = unsafe { sample.GetSampleDuration().unwrap_or(0) };
         state.pending = Some((time, if duration > 0 { duration } else { 100_000 }));
+        state.inputs += 1;
+        if state.inputs <= 3 || state.inputs % 100 == 0 {
+            log::line(&format!(
+                "ProcessInput #{} time={time} duration={duration}",
+                state.inputs
+            ));
+        }
         Ok(())
     }
 
@@ -293,9 +309,12 @@ impl IMFTransform_Impl for Stub_Impl {
         let Some((time, duration)) = state.pending.take() else {
             return Err(MF_E_TRANSFORM_NEED_MORE_INPUT.into());
         };
-        if !state.produced_logged {
-            state.produced_logged = true;
-            log::line("ProcessOutput (first silence)");
+        state.outputs += 1;
+        if state.outputs <= 3 || state.outputs % 100 == 0 {
+            log::line(&format!(
+                "ProcessOutput #{} time={time} duration={duration}",
+                state.outputs
+            ));
         }
         let frames = (duration as u64 * RATE as u64 / 10_000_000).max(1) as u32;
         let bytes = frames * BYTES_PER_FRAME;

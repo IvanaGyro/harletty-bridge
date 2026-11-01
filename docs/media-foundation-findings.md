@@ -60,11 +60,37 @@ registered, and which MFT does it instantiate? If it picks Windows' converter,
 the plan needs a way to win (a different output type the converter cannot
 produce, or a registration the sort order puts first).
 
+## Measured on a desktop (Windows ARM64, the arm64 build from run 41318298761)
+
+`mf-player-probe` (an unpackaged desktop process) with the stub registered and
+a TrueHD 7.1 MKV:
+
+- **The WinRT `MediaPlayer` loaded the registered stub for TrueHD.** The stub
+  log shows `DllGetClassObject`, `SetInputType subtype={EB27CEC4-…}` (TrueHD),
+  and `ProcessOutput`, from the probe's PID, `desktop` (not AppContainer). The
+  player reported `MediaOpened`.
+- **It chose the stub over Windows' own "Dolby TrueHD IEC-61937 converter
+  MFT".** `MFTEnumEx` with `SORTANDFILTER` lists the converter first and the
+  stub second, yet the stub was instantiated. Most likely the converter cannot
+  produce the float PCM the player asks for; not tested further. This answers
+  the F5 worry for this player. WMP and FluentFin are still open.
+- `MFTEnumEx` and `CodecQuery` agree. `UNTRUSTED_STOREMFT` only reorders the
+  list here.
+- E-AC-3/AC-3: Windows' "Dolby Digital Plus Decoder MFT" is listed (its CLSID
+  attribute is absent, shown as `?`), next to the IEC 61937 converter. The
+  stub was not registered for these in this run.
+- **Playback stalled.** The position reached 0.80 s in 10 s. Not yet
+  explained: a bug in the stub's flow or timestamps is the first suspect. The
+  stub now logs the first three `ProcessInput`/`ProcessOutput` calls, every
+  hundredth after, every `ProcessMessage`, and the accepted output type, to
+  find where it stops.
+
 ## Open (desktop)
 
-- Which of WMP Legacy, the WinRT `MediaPlayer`, FluentFin (direct play) and
-  the Media Player app load the stub, and which MFT they choose (matrix in the
+- Whether WMP Legacy, FluentFin (direct play) and the Media Player app load
+  the stub (the WinRT `MediaPlayer` in a desktop process does; matrix in the
   plan, Phase 0 step 4.4).
+- Why playback stalls after 0.8 s with the stub.
 - The app-service route (F12), only if the WinRT rows fail.
 - Subtype GUIDs the MKV source really sets, and which `wmplayer.exe` the Start
   menu runs (`tools/mf-probe`, not yet written).
