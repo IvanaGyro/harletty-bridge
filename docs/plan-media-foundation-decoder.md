@@ -267,8 +267,6 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   WMP's process starts at WMP's folder. This needs no upstream change. The
   MFT crate links no decoder, which `check-crate-isolation.sh` enforces
   (Phase 1).
-  The folder can be overridden by `bridge_dir` in `mf.yaml`, and for tests by
-  the `HARLETTY_MF_BRIDGE_DIR` environment variable.
 - **D4. Output: `MFAudioFormat_Float`, the input's sample rate, the PC's
   speaker layout.** The channel mask is read once per stream from the default
   render endpoint (`IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender,
@@ -441,15 +439,6 @@ are ones `label_for_name` maps to the label in the third column:
 | `SPEAKER_TOP_BACK_CENTER` | 0x10000 | — | none: bit dropped from the mask | — |
 | `SPEAKER_TOP_BACK_RIGHT` | 0x20000 | TBR | Tbr | 1, -1, 1 |
 
-- **Fewer than three speakers** (stereo, mono, headphones): the engine's
-  panner needs at least three speakers to start, so the session gives it a
-  7.1.4 layout and switches on the binaural stage
-  (`render.binaural.output_mode: binaural`, in a small config file written
-  next to the layout). In that mode the engine bypasses the VBAP panner and
-  renders every bed channel and object straight to two channels through an
-  HRTF (Omniphony `BINAURAL.md`); the 7.1.4 layout only places the beds. Measured on the repository's fixtures: the stereo
-  output carries signal and the channel order matches. Mono output is given
-  stereo.
 - Unit test: for every mask the table covers, the YAML parses as an
   Omniphony layout (use the `renderer` crate's layout loader).
 - Unit test: `label_for_name` of each generated name gives the table's label,
