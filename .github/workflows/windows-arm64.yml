@@ -74,3 +74,17 @@ jobs:
             test -f "target/release/harletty_${f}_bridge.dll"
           done
         working-directory: harletty-bridge
+
+      # For testing on a Windows ARM64 machine: download from the run's page.
+      # Named by commit, so artifacts from different pushes do not collide.
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: harletty-windows-arm64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            harletty-bridge/target/release/harletty_dolby_bridge.dll
+            harletty-bridge/target/release/harletty_dts_bridge.dll
+            harletty-bridge/target/release/harletty_iamf_bridge.dll
+            harletty-bridge/target/release/harletty.exe
+          if-no-files-found: error
+          retention-days: 30
