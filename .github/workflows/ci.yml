@@ -90,6 +90,14 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
 
+      # The Media Foundation decoder's portable part (speaker layout, clock,
+      # config, session); its COM shell builds and runs on the Windows jobs.
+      - name: Test the Media Foundation decoder (portable part)
+        run: cargo test --locked -p harletty-mf-decoder
+        working-directory: harletty-bridge
+        env:
+          RUSTFLAGS: -D warnings
+
       # dca picks its vector code from the CPU it runs on, so the run above
       # tests whatever the runner has (AVX2, or AVX-512 on some hosts). Test
       # the portable and the AVX2 code on every run as well (`dca/src/cpu.rs`);

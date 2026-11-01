@@ -87,19 +87,30 @@ mod tests {
         for codec in CODECS {
             let taken = DolbyPipeline::INPUT_CODECS.contains(&codec.input_codec)
                 || DtsPipeline::INPUT_CODECS.contains(&codec.input_codec);
-            assert!(taken, "{}: no family takes {:?}", codec.name, codec.input_codec);
+            assert!(
+                taken,
+                "{}: no family takes {:?}",
+                codec.name, codec.input_codec
+            );
         }
     }
 
     #[test]
     fn find_by_subtype() {
-        assert_eq!(find(CODECS[0].subtype).map(|c| c.name), Some("Dolby TrueHD"));
+        assert_eq!(
+            find(CODECS[0].subtype).map(|c| c.name),
+            Some("Dolby TrueHD")
+        );
         assert!(find(0).is_none());
     }
 
     #[test]
     fn dolby_digital_is_opt_in() {
-        let default: Vec<_> = CODECS.iter().filter(|c| c.default).map(|c| c.option).collect();
+        let default: Vec<_> = CODECS
+            .iter()
+            .filter(|c| c.default)
+            .map(|c| c.option)
+            .collect();
         assert_eq!(default, ["truehd", "dts", "dts"]);
     }
 }

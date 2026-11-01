@@ -67,12 +67,24 @@ jobs:
         run: cargo test --release --locked -p bridge-family-iamf -p harletty-iamf-bridge
         working-directory: harletty-bridge
 
+      # Not a default member: built and tested on its own. The registration
+      # test writes under HKLM, which the hosted runner may do.
+      - name: Build and test the Media Foundation decoder (release)
+        shell: bash
+        env:
+          HARLETTY_MF_REGISTRY_TEST: "1"
+        run: |
+          cargo build --release --locked -p harletty-mf-decoder
+          cargo test --release --locked -p harletty-mf-decoder
+        working-directory: harletty-bridge
+
       - name: Check the plugin libraries exist
         shell: bash
         run: |
           for f in dolby dts iamf; do
             test -f "target/release/harletty_${f}_bridge.dll"
           done
+          test -f target/release/harletty_mf.dll
         working-directory: harletty-bridge
 
       # For testing on a Windows ARM64 machine: download from the run's page.
@@ -86,5 +98,50 @@ jobs:
             harletty-bridge/target/release/harletty_dts_bridge.dll
             harletty-bridge/target/release/harletty_iamf_bridge.dll
             harletty-bridge/target/release/harletty.exe
+            harletty-bridge/target/release/harletty_mf.dll
+          if-no-files-found: error
+          retention-days: 30
+
+  # The same decoder on x64, where most Windows machines are. Only the
+  # Media Foundation decoder: the rest is built by the ARM64 job and ci.yml.
+  mf-decoder-x64:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -D warnings -C target-feature=+crt-static
+    steps:
+      - name: Checkout harletty-bridge
+        uses: actions/checkout@v5
+        with:
+          path: harletty-bridge
+
+      - name: Resolve the Omniphony ref
+        id: omniphony
+        shell: bash
+        run: echo "ref=$(harletty-bridge/scripts/omniphony-ref.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Omniphony (path dependencies)
+        uses: actions/checkout@v5
+        with:
+          repository: mgth/Omniphony
+          ref: ${{ steps.omniphony.outputs.ref }}
+          path: Omniphony
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and test the Media Foundation decoder (release)
+        shell: bash
+        env:
+          HARLETTY_MF_REGISTRY_TEST: "1"
+        run: |
+          cargo build --release --locked -p harletty-mf-decoder
+          cargo test --release --locked -p harletty-mf-decoder
+        working-directory: harletty-bridge
+
+      - name: Upload the decoder
+        uses: actions/upload-artifact@v7
+        with:
+          name: harletty-mf-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: harletty-bridge/target/release/harletty_mf.dll
           if-no-files-found: error
           retention-days: 30

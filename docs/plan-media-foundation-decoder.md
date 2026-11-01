@@ -297,7 +297,7 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   shown what WMP does when Microsoft's decoder is also registered (F5).
   Without objects, Microsoft's decoder already plays them.
 - **D7. Split: a portable core and a thin COM shell.**
-  - `core` holds no COM, and every platform builds and tests it. It covers
+  - `portable` holds no COM (not named `core`, which would shadow the `core` crate), and every platform builds and tests it. It covers
     the subtype→codec table, mask→layout generation, sample-time arithmetic,
     the output queue, the config, and the session around `Engine`.
   - `com` (Windows only) holds the `IClassFactory`, the `IMFTransform`, the
@@ -333,8 +333,8 @@ wmplayer.exe
                          │
                          ▼
                harletty_mf.dll  (IMFTransform, synchronous, 1 in / 1 out)
-                 com/   IMFTransform ⇄ core::Session
-                 core/  Session ── orender_engine::Engine
+                 com/   IMFTransform ⇄ portable::Session
+                 portable/ Session ── orender_engine::Engine
                                      ├─ harletty_dolby_bridge.dll  (TrueHD, E-AC-3)
                                      ├─ harletty_dts_bridge.dll    (DTS family)
                                      └─ VBAP / binaural render to the generated layout
@@ -392,7 +392,7 @@ with, so the output type never changes mid-stream, whatever the content does
   answer `ProcessOutput` once with `MF_E_TRANSFORM_STREAM_CHANGE` and
   `MFT_OUTPUT_DATA_BUFFER_FORMAT_CHANGE`, and offer the new rate.
 
-### The codec table (`core/codecs.rs`)
+### The codec table (`portable/codecs.rs`)
 
 | Subtype (name in the Windows SDK) | GUID (*verify* against the SDK headers and the Phase 0 probe) | `input_codec` | Registered |
 |---|---|---|---|
@@ -412,7 +412,7 @@ with, so the output type never changes mid-stream, whatever the content does
 - `MFAudioFormat_Dolby_AC3_SPDIF` and other IEC 61937-framed subtypes are not
   registered: they are passthrough formats.
 
-### The generated layout (`core/layout.rs`)
+### The generated layout (`portable/layout.rs`)
 
 One speaker per mask bit, in ascending bit order. The coordinates follow
 Omniphony's convention (F8, copied from `layouts/7.1.4.yaml`), and the names
@@ -453,13 +453,13 @@ are ones `label_for_name` maps to the label in the third column:
 mf-decoder/
   Cargo.toml                 # D1; orender_engine + bridge_api by path; windows (cfg(windows))
   src/lib.rs                 # mod core; #[cfg(windows)] mod com; DLL exports re-exported
-  src/core/mod.rs
-  src/core/codecs.rs         # codec table (subtype GUID as u128, input_codec, default/opt-in)
-  src/core/layout.rs         # mask → YAML layout, mask ↔ labels
-  src/core/clock.rs          # sample-time arithmetic (100 ns ↔ µs ↔ frames)
-  src/core/config.rs         # mf.yaml + config.yaml lookup (D5)
-  src/core/session.rs        # Engine wrapper: new/push/drain/reset, output queue
-  src/core/log.rs            # file logger (log facade), off unless enabled
+  src/portable/mod.rs
+  src/portable/codecs.rs         # codec table (subtype GUID as u128, input_codec, default/opt-in)
+  src/portable/layout.rs         # mask → YAML layout, mask ↔ labels
+  src/portable/clock.rs          # sample-time arithmetic (100 ns ↔ µs ↔ frames)
+  src/portable/config.rs         # mf.yaml + config.yaml lookup (D5)
+  src/portable/session.rs        # Engine wrapper: new/push/drain/reset, output queue
+  src/portable/log.rs            # file logger (log facade), off unless enabled
   src/com/mod.rs
   src/com/exports.rs         # DllGetClassObject, DllCanUnloadNow (always S_FALSE), DllRegisterServer, DllUnregisterServer
   src/com/factory.rs         # IClassFactory
@@ -642,8 +642,8 @@ Done when:
 
 ### Phase 1: crate skeleton, COM plumbing, registration
 
-1. Create `mf-decoder/` per "Files", with `core/codecs.rs`, `core/layout.rs`,
-   `core/clock.rs` and `core/config.rs` complete and unit-tested, and
+1. Create `mf-decoder/` per "Files", with `portable/codecs.rs`, `portable/layout.rs`,
+   `portable/clock.rs` and `portable/config.rs` complete and unit-tested, and
    `session.rs` stubbed (silence).
 2. `com/`: the class factory, the `IMFTransform` per the contract (with the
    stub session), the four DLL exports, and the registration.
@@ -681,7 +681,7 @@ Done when:
 
 ### Phase 2: decoding and rendering
 
-1. `core/session.rs`:
+1. `portable/session.rs`:
    - `Session::new(codec, rate, mask, paths)` writes or reuses the layout
      YAML, resolves the two configs (D5), and calls `Engine::from_paths(Some
      (config), Some(layout), &[dolby_dll, dts_dll], Some(codec), rate)`.
@@ -693,7 +693,7 @@ Done when:
    - `drain()` and `reset()` complete the API.
    - The engine's decode thread stays `off`: `DecodeThreadMode` default; see
      Risks before enabling it.
-2. Logging (`core/log.rs`): a `log::Log` writing to
+2. Logging (`com/logger.rs`): a `log::Log` writing to
    `%LOCALAPPDATA%\harletty\mf\harletty-mf.log` at `mf.yaml`'s `log_level`
    (default `warn`). It is installed with `log::set_logger` once, ignoring an
    error if the process already has one. The bridges' messages reach it
