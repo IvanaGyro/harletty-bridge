@@ -279,3 +279,35 @@ fn an_output_type_that_does_not_describe_our_buffers_is_refused() {
         );
     }
 }
+
+#[test]
+fn current_types_are_copies_the_host_cannot_edit_through() {
+    let mft = decoder();
+    let offered = start(&mft);
+    unsafe {
+        // Edit what we hand out: the next query is unaffected.
+        let current = mft.GetOutputCurrentType(0).unwrap();
+        current.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 64).unwrap();
+        let again = mft.GetOutputCurrentType(0).unwrap();
+        assert_eq!(again.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE).unwrap(), 32);
+
+        // Edit the type we were given after accepting it: also unaffected.
+        let mine = MFCreateMediaType().unwrap();
+        offered.CopyAllItems(&mine).unwrap();
+        mft.SetOutputType(0, &mine, 0).unwrap();
+        mine.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 64).unwrap();
+        let stored = mft.GetOutputCurrentType(0).unwrap();
+        assert_eq!(stored.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE).unwrap(), 32);
+
+        // The same for the input type.
+        let input = mft.GetInputCurrentType(0).unwrap();
+        input
+            .SetGUID(&MF_MT_SUBTYPE, &GUID::from_u128(CODECS[1].subtype))
+            .unwrap();
+        let input_again = mft.GetInputCurrentType(0).unwrap();
+        assert_eq!(
+            input_again.GetGUID(&MF_MT_SUBTYPE).unwrap(),
+            GUID::from_u128(CODECS[TRUEHD].subtype)
+        );
+    }
+}

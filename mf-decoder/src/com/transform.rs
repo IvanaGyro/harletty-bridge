@@ -81,6 +81,16 @@ fn codec_of(ty: &IMFMediaType, config: &MfConfig) -> Option<&'static Codec> {
     find(subtype.to_u128()).filter(|codec| config.enabled(codec))
 }
 
+/// An independent copy of `ty`: a COM `clone` only takes another reference, so
+/// a host that edits a type it was handed (or one it passed in) would edit ours.
+fn copy_type(ty: &IMFMediaType) -> windows::core::Result<IMFMediaType> {
+    unsafe {
+        let copy = MFCreateMediaType()?;
+        ty.CopyAllItems(&copy)?;
+        Ok(copy)
+    }
+}
+
 /// The float output type for `session`.
 fn output_type(session: &Session) -> windows::core::Result<IMFMediaType> {
     let (rate, channels) = (session.rate(), session.channels());
@@ -274,7 +284,7 @@ impl IMFTransform_Impl for Decoder_Impl {
                 session.channels(),
                 session.mask()
             );
-            state.input_type = Some(ty.clone());
+            state.input_type = Some(copy_type(ty)?);
             state.output_type = None;
             state.session = Some(session);
             state.queue.clear();
@@ -326,24 +336,26 @@ impl IMFTransform_Impl for Decoder_Impl {
                 return Err(MF_E_INVALIDMEDIATYPE.into());
             }
             if !test_only {
-                state.output_type = Some(ty.clone());
+                state.output_type = Some(copy_type(ty)?);
             }
             Ok(())
         })
     }
 
     fn GetInputCurrentType(&self, _: u32) -> windows::core::Result<IMFMediaType> {
-        self.state()
-            .input_type
-            .clone()
-            .ok_or_else(|| MF_E_TRANSFORM_TYPE_NOT_SET.into())
+        let state = self.state();
+        match state.input_type.as_ref() {
+            Some(ty) => copy_type(ty),
+            None => Err(MF_E_TRANSFORM_TYPE_NOT_SET.into()),
+        }
     }
 
     fn GetOutputCurrentType(&self, _: u32) -> windows::core::Result<IMFMediaType> {
-        self.state()
-            .output_type
-            .clone()
-            .ok_or_else(|| MF_E_TRANSFORM_TYPE_NOT_SET.into())
+        let state = self.state();
+        match state.output_type.as_ref() {
+            Some(ty) => copy_type(ty),
+            None => Err(MF_E_TRANSFORM_TYPE_NOT_SET.into()),
+        }
     }
 
     fn GetInputStatus(&self, _: u32) -> windows::core::Result<u32> {
