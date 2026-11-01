@@ -278,7 +278,15 @@ impl IMFTransform_Impl for Decoder_Impl {
                     super::endpoint::speaker_mask().unwrap_or(layout::STEREO)
                 }
             };
-            let session = Session::new(codec, rate, mask);
+            let setup = super::paths::session_setup(&state.config).map_err(|e| {
+                log::error!("{e}");
+                windows::core::Error::from(MF_E_INVALIDMEDIATYPE)
+            })?;
+            let session = Session::open(codec, rate, mask, &setup).map_err(|e| {
+                // Not an error to the player: it tries the next decoder.
+                log::error!("cannot start {}: {e}", codec.name);
+                windows::core::Error::from(MF_E_INVALIDMEDIATYPE)
+            })?;
             log::info!(
                 "output: {} channels, mask 0x{:X}",
                 session.channels(),
@@ -394,8 +402,10 @@ impl IMFTransform_Impl for Decoder_Impl {
                 }
             } else if message == MFT_MESSAGE_COMMAND_DRAIN {
                 if let Some(session) = state.session.as_mut() {
-                    let blocks = session.drain();
-                    state.queue.extend(blocks);
+                    match session.drain() {
+                        Ok(blocks) => state.queue.extend(blocks),
+                        Err(e) => log::error!("drain failed: {e}"),
+                    }
                 }
             } else if message == MFT_MESSAGE_SET_D3D_MANAGER {
                 return Err(E_NOTIMPL.into());
@@ -431,8 +441,15 @@ impl IMFTransform_Impl for Decoder_Impl {
             if discontinuity {
                 session.reset();
             }
-            let blocks = session.push(&bytes, pts);
-            state.queue.extend(blocks);
+            match session.push(&bytes, pts) {
+                Ok(blocks) => state.queue.extend(blocks),
+                Err(e) => {
+                    // One bad packet must not end playback: start over from
+                    // the next one.
+                    log::error!("decode failed: {e}; session reset");
+                    session.reset();
+                }
+            }
             Ok(())
         })
     }

@@ -67,7 +67,10 @@ check harletty-iamf-bridge "IAMF plugin" truehd eac3 dca auro "${cli[@]}"
 
 # The Media Foundation decoder holds no decoder at all: the decoders are the
 # bridge DLLs, loaded from its own folder at run time (docs/plan-media-foundation-decoder.md, D3).
-check harletty-mf-decoder "Media Foundation decoder" truehd eac3 dca auro iamf-dec iamf-obu iamf-codecs "${cli[@]}"
+# It links Omniphony's engine, whose live_log crate pulls in env_logger; the DLL
+# never starts that logger (it installs its own file logger), so env_logger is
+# allowed here. The decoders and the offline CLI's crates are not.
+check harletty-mf-decoder "Media Foundation decoder" truehd eac3 dca auro iamf-dec iamf-obu iamf-codecs damf clap indicatif indicatif-log-bridge
 
 # The combined bridge (an rlib for the fuzz target, the bench and the kit).
 check harletty-bridge "combined bridge" "${cli[@]}"

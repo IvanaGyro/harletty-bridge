@@ -1,7 +1,12 @@
 //! The transform driven through COM, the way a player drives it: class
-//! factory, input type, output type, samples in, samples out, flush. No
+//! factory, input type, output type, access units in, audio out, flush, drain.
+//! The decoder is the real one: the engine and the DTS bridge library (which
+//! cargo builds next to this executable because the plugin crates are
+//! dev-dependencies), decoding the repository's DTS core fixture. No
 //! registration, no administrator rights, no audio device.
 #![cfg(windows)]
+
+use std::sync::Once;
 
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, IClassFactory};
@@ -10,9 +15,24 @@ use windows::core::{GUID, Interface};
 use harletty_mf::com::{CLSID_DECODER, DllGetClassObject};
 use harletty_mf::portable::codecs::CODECS;
 
-const TRUEHD: usize = 0;
+const DTS_CORE: &[u8] = include_bytes!("../../harletty/tests/fixtures/dts_core_tone_10f.dts");
+/// DTS-HD: the subtype Windows' Matroska source gives a DTS track.
+const DTS: usize = 1;
+/// Pieces of the stream, as a demuxer would hand them over.
+const PIECE: usize = 1024;
 
 fn decoder() -> IMFTransform {
+    static ENV: Once = Once::new();
+    ENV.call_once(|| {
+        // The bridge libraries sit next to this executable.
+        let dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        // SAFETY: set once, before any thread of ours reads it.
+        unsafe { std::env::set_var("HARLETTY_MF_BRIDGE_DIR", dir) };
+    });
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap();
@@ -39,11 +59,15 @@ fn input_type(codec: usize, rate: u32) -> IMFMediaType {
     }
 }
 
-fn access_unit(pts_hns: i64, discontinuity: bool) -> IMFSample {
+fn access_unit(bytes: &[u8], pts_hns: i64, discontinuity: bool) -> IMFSample {
     unsafe {
         let sample = MFCreateSample().unwrap();
-        let buffer = MFCreateMemoryBuffer(16).unwrap();
-        buffer.SetCurrentLength(16).unwrap();
+        let buffer = MFCreateMemoryBuffer(bytes.len() as u32).unwrap();
+        let (mut data, mut max) = (std::ptr::null_mut(), 0u32);
+        buffer.Lock(&mut data, Some(&mut max), None).unwrap();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+        buffer.Unlock().unwrap();
+        buffer.SetCurrentLength(bytes.len() as u32).unwrap();
         sample.AddBuffer(&buffer).unwrap();
         sample.SetSampleTime(pts_hns).unwrap();
         if discontinuity {
@@ -65,16 +89,77 @@ fn process_output(mft: &IMFTransform) -> windows::core::Result<(IMFSample, u32)>
     }
 }
 
-/// Negotiate TrueHD in, float out, and return the output type.
+/// Negotiate DTS in, float out, and return the output type.
 fn start(mft: &IMFTransform) -> IMFMediaType {
     unsafe {
-        mft.SetInputType(0, &input_type(TRUEHD, 48_000), 0).unwrap();
+        mft.SetInputType(0, &input_type(DTS, 48_000), 0).unwrap();
         let out = mft.GetOutputAvailableType(0, 0).unwrap();
         mft.SetOutputType(0, &out, 0).unwrap();
         mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
             .unwrap();
         out
     }
+}
+
+/// What one output sample holds: its time, duration and floats.
+struct Out {
+    start: i64,
+    duration: i64,
+    samples: Vec<f32>,
+}
+
+fn read(sample: &IMFSample) -> Out {
+    unsafe {
+        let buffer = sample.ConvertToContiguousBuffer().unwrap();
+        let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
+        buffer.Lock(&mut data, None, Some(&mut len)).unwrap();
+        let bytes = std::slice::from_raw_parts(data, len as usize).to_vec();
+        buffer.Unlock().unwrap();
+        Out {
+            start: sample.GetSampleTime().unwrap(),
+            duration: sample.GetSampleDuration().unwrap(),
+            samples: bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect(),
+        }
+    }
+}
+
+/// Take everything the transform will give without more input.
+fn take_all(mft: &IMFTransform, into: &mut Vec<Out>) {
+    while let Ok((sample, _)) = process_output(mft) {
+        into.push(read(&sample));
+    }
+}
+
+/// Feed the whole fixture, taking output as it comes, then drain.
+fn decode_all(mft: &IMFTransform) -> Vec<Out> {
+    let mut out = Vec::new();
+    for (i, piece) in DTS_CORE.chunks(PIECE).enumerate() {
+        unsafe {
+            mft.ProcessInput(0, &access_unit(piece, i as i64 * 100_000, false), 0)
+                .unwrap()
+        };
+        take_all(mft, &mut out);
+    }
+    unsafe { mft.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0).unwrap() };
+    take_all(mft, &mut out);
+    out
+}
+
+/// Feed pieces until the transform holds output, and return how many it took.
+fn feed_until_output(mft: &IMFTransform) -> usize {
+    for (i, piece) in DTS_CORE.chunks(PIECE).enumerate() {
+        unsafe {
+            mft.ProcessInput(0, &access_unit(piece, i as i64 * 100_000, false), 0)
+                .unwrap()
+        };
+        if unsafe { mft.GetOutputStatus().unwrap() } == MFT_OUTPUT_STATUS_SAMPLE_READY.0 as u32 {
+            return i + 1;
+        }
+    }
+    panic!("the fixture produced no output");
 }
 
 #[test]
@@ -126,62 +211,42 @@ fn input_types_are_the_enabled_codecs_only() {
 }
 
 #[test]
-fn samples_in_audio_out_with_matching_times() {
+fn the_fixture_decodes_to_audio_that_tiles_on_the_timeline() {
     let mft = decoder();
-    let out = start(&mft);
-    let rate = 48_000u64;
-    let channels = unsafe { out.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS).unwrap() } as usize;
-    unsafe {
-        // The first sample only starts the timeline.
-        mft.ProcessInput(0, &access_unit(1_000_000, false), 0)
-            .unwrap();
-        assert_eq!(
-            process_output(&mft).unwrap_err().code(),
-            MF_E_TRANSFORM_NEED_MORE_INPUT
-        );
-
-        // Blocks 0.83 ms apart, no durations: 100 of them.
-        let mut frames = 0u64;
-        let mut next_start = 1_000_000i64;
-        for i in 1..=100 {
-            mft.ProcessInput(0, &access_unit(1_000_000 + i * 8_333, false), 0)
-                .unwrap();
-            while let Ok((sample, _)) = process_output(&mft) {
-                assert_eq!(sample.GetSampleTime().unwrap(), next_start);
-                let duration = sample.GetSampleDuration().unwrap();
-                let buffer = sample.ConvertToContiguousBuffer().unwrap();
-                let len = buffer.GetCurrentLength().unwrap() as usize;
-                assert_eq!(len % (channels * 4), 0);
-                let block_frames = (len / (channels * 4)) as u64;
-                frames += block_frames;
-                next_start += duration;
-            }
-        }
-        // 100 blocks cover 83.3 ms, not 10 s.
-        let expected = (100 * 8_333) as u64 * rate / 10_000_000;
-        assert_eq!(frames, expected);
+    let channels = unsafe { start(&mft).GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS).unwrap() } as usize;
+    let out = decode_all(&mft);
+    assert!(!out.is_empty(), "no audio came out");
+    let frames: usize = out.iter().map(|o| o.samples.len() / channels).sum();
+    assert!(frames > 0);
+    for o in &out {
+        assert_eq!(o.samples.len() % channels, 0);
     }
+    for pair in out.windows(2) {
+        assert_eq!(pair[0].start + pair[0].duration, pair[1].start);
+    }
+    let peak = out
+        .iter()
+        .flat_map(|o| o.samples.iter())
+        .fold(0.0f32, |m, &v| m.max(v.abs()));
+    assert!(peak > 1e-3, "the output is silent");
 }
 
 #[test]
 fn input_is_refused_until_the_output_is_taken() {
     let mft = decoder();
     start(&mft);
+    let taken = feed_until_output(&mft);
     unsafe {
-        mft.ProcessInput(0, &access_unit(0, false), 0).unwrap();
-        mft.ProcessInput(0, &access_unit(100_000, false), 0)
-            .unwrap();
+        let next = &DTS_CORE[(taken * PIECE).min(DTS_CORE.len() - 1)..];
+        assert_eq!(mft.GetInputStatus(0).unwrap(), 0);
         assert_eq!(
-            mft.GetOutputStatus().unwrap(),
-            MFT_OUTPUT_STATUS_SAMPLE_READY.0 as u32
-        );
-        assert_eq!(
-            mft.ProcessInput(0, &access_unit(200_000, false), 0)
+            mft.ProcessInput(0, &access_unit(&next[..1], 0, false), 0)
                 .unwrap_err()
                 .code(),
             MF_E_NOTACCEPTING
         );
-        process_output(&mft).unwrap();
+        let mut sink = Vec::new();
+        take_all(&mft, &mut sink);
         assert_eq!(
             mft.GetInputStatus(0).unwrap(),
             MFT_INPUT_STATUS_ACCEPT_DATA.0 as u32
@@ -190,47 +255,56 @@ fn input_is_refused_until_the_output_is_taken() {
 }
 
 #[test]
-fn flush_and_discontinuity_start_a_new_timeline() {
+fn flush_drops_what_is_queued_and_decoding_starts_over() {
     let mft = decoder();
     start(&mft);
+    feed_until_output(&mft);
     unsafe {
-        mft.ProcessInput(0, &access_unit(0, false), 0).unwrap();
-        mft.ProcessInput(0, &access_unit(100_000, false), 0)
-            .unwrap();
         mft.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0).unwrap();
-        assert_eq!(
-            process_output(&mft).unwrap_err().code(),
-            MF_E_TRANSFORM_NEED_MORE_INPUT
-        );
-
-        // After a flush the next sample starts over, wherever it is.
-        mft.ProcessInput(0, &access_unit(90_000_000, false), 0)
-            .unwrap();
-        assert_eq!(
-            process_output(&mft).unwrap_err().code(),
-            MF_E_TRANSFORM_NEED_MORE_INPUT
-        );
-        mft.ProcessInput(0, &access_unit(90_100_000, false), 0)
-            .unwrap();
-        assert_eq!(
-            process_output(&mft).unwrap().0.GetSampleTime().unwrap(),
-            90_000_000
-        );
-
-        // A discontinuity flag does the same.
-        mft.ProcessInput(0, &access_unit(500_000_000, true), 0)
-            .unwrap();
+        assert_eq!(mft.GetOutputStatus().unwrap(), 0);
         assert_eq!(
             process_output(&mft).unwrap_err().code(),
             MF_E_TRANSFORM_NEED_MORE_INPUT
         );
     }
+    // The stream again from the start still decodes.
+    assert!(!decode_all(&mft).is_empty());
 }
 
 #[test]
-fn drain_with_nothing_held_is_quiet() {
+fn a_discontinuity_flag_restarts_the_stream_without_an_error() {
     let mft = decoder();
     start(&mft);
+    feed_until_output(&mft);
+    let mut sink = Vec::new();
+    take_all(&mft, &mut sink);
+    unsafe {
+        mft.ProcessInput(0, &access_unit(&DTS_CORE[..PIECE], 500_000_000, true), 0)
+            .unwrap()
+    };
+    take_all(&mft, &mut sink);
+}
+
+#[test]
+fn garbage_in_is_not_an_error_and_does_not_stop_playback() {
+    let mft = decoder();
+    start(&mft);
+    let garbage = vec![0xA5u8; 4096];
+    unsafe {
+        mft.ProcessInput(0, &access_unit(&garbage, 0, false), 0)
+            .unwrap()
+    };
+    let mut sink = Vec::new();
+    take_all(&mft, &mut sink);
+    // A real stream after it still decodes.
+    assert!(!decode_all(&mft).is_empty());
+}
+
+#[test]
+fn drain_after_everything_is_taken_is_quiet() {
+    let mft = decoder();
+    start(&mft);
+    decode_all(&mft);
     unsafe {
         mft.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0).unwrap();
         assert_eq!(
@@ -302,12 +376,12 @@ fn current_types_are_copies_the_host_cannot_edit_through() {
         // The same for the input type.
         let input = mft.GetInputCurrentType(0).unwrap();
         input
-            .SetGUID(&MF_MT_SUBTYPE, &GUID::from_u128(CODECS[1].subtype))
+            .SetGUID(&MF_MT_SUBTYPE, &GUID::from_u128(CODECS[0].subtype))
             .unwrap();
         let input_again = mft.GetInputCurrentType(0).unwrap();
         assert_eq!(
             input_again.GetGUID(&MF_MT_SUBTYPE).unwrap(),
-            GUID::from_u128(CODECS[TRUEHD].subtype)
+            GUID::from_u128(CODECS[DTS].subtype)
         );
     }
 }

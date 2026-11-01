@@ -18,6 +18,9 @@ pub struct Codec {
     pub input_codec: &'static str,
     /// The `codecs:` name in `mf.yaml` that switches it on and off.
     pub option: &'static str,
+    /// Which bridge plugin decodes it: `dolby` or `dts`
+    /// (`harletty_<family>_bridge`, in the folder of this DLL).
+    pub bridge: &'static str,
     /// Registered unless `mf.yaml` says otherwise. E-AC-3 and AC-3 are not:
     /// Microsoft's decoder already plays them.
     pub default: bool,
@@ -29,6 +32,7 @@ pub const CODECS: &[Codec] = &[
         subtype: 0xEB27CEC4_163E_4CA3_8B74_8E25F91B517E, // MEDIASUBTYPE_DOLBY_TRUEHD
         input_codec: "truehd",
         option: "truehd",
+        bridge: "dolby",
         default: true,
     },
     Codec {
@@ -36,6 +40,7 @@ pub const CODECS: &[Codec] = &[
         subtype: 0xA2E58EB7_0FA9_48BB_A40C_FA0E156D0645, // MEDIASUBTYPE_DTS_HD
         input_codec: "dts",
         option: "dts",
+        bridge: "dts",
         default: true,
     },
     Codec {
@@ -43,6 +48,7 @@ pub const CODECS: &[Codec] = &[
         subtype: 0x00000008_0000_0010_8000_00AA00389B71, // MFAudioFormat_DTS, WAVE_FORMAT_DTS
         input_codec: "dts",
         option: "dts",
+        bridge: "dts",
         default: true,
     },
     Codec {
@@ -50,6 +56,7 @@ pub const CODECS: &[Codec] = &[
         subtype: 0xA7FB87AF_2D02_42FB_A4D4_05CD93843BDD, // MFAudioFormat_Dolby_DDPlus
         input_codec: "eac3",
         option: "eac3",
+        bridge: "dolby",
         default: false,
     },
     Codec {
@@ -57,6 +64,7 @@ pub const CODECS: &[Codec] = &[
         subtype: 0xE06D802C_DB46_11CF_B4D1_00805F6CBBEA, // MFAudioFormat_Dolby_AC3
         input_codec: "ac3",
         option: "ac3",
+        bridge: "dolby",
         default: false,
     },
 ];
@@ -92,6 +100,18 @@ mod tests {
                 "{}: no family takes {:?}",
                 codec.name, codec.input_codec
             );
+        }
+    }
+
+    #[test]
+    fn every_codec_names_a_bridge_that_lists_it() {
+        for codec in CODECS {
+            let family: &[&str] = match codec.bridge {
+                "dolby" => DolbyPipeline::INPUT_CODECS,
+                "dts" => DtsPipeline::INPUT_CODECS,
+                other => panic!("{}: unknown bridge {other:?}", codec.name),
+            };
+            assert!(family.contains(&codec.input_codec), "{}", codec.name);
         }
     }
 

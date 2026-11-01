@@ -1,14 +1,18 @@
-//! One stream's decoder, as the transform drives it. Phase 1: the session
-//! decodes nothing and answers with silence, so the COM plumbing can be proven
-//! in Windows Media Player before any decoder is wired in. Phase 2 puts
-//! `orender_engine` behind the same interface.
+//! One stream's decoder, as the transform drives it: compressed access units
+//! in, interleaved float blocks out, each placed on the timeline.
 //!
-//! The silence covers the time between consecutive input timestamps rather than
-//! a duration taken from each sample: Matroska blocks of TrueHD carry no
-//! duration, and guessing one (the Phase 0 stub gave every block 100 ms) puts
-//! the timeline far ahead of the audio.
+//! The decoding is `orender_engine`'s: it loads the family's bridge DLL, which
+//! decodes the stream, and renders the result (objects included) to the speaker
+//! layout generated from the channel mask. Everything here is the adaptation:
+//! the layout file, the check that the engine's channels are the mask's in
+//! order, the timestamps, the errors.
 
-use super::clock::{OutputClock, hns_to_frames};
+use std::path::{Path, PathBuf};
+
+use bridge_api::RInputTransport;
+use orender_engine::{Engine, RenderedAudio};
+
+use super::clock::{OutputClock, frames_to_hns, hns_to_us, us_to_hns};
 use super::codecs::Codec;
 use super::layout;
 
@@ -21,36 +25,134 @@ pub struct Block {
     pub samples: Vec<f32>,
 }
 
-#[derive(Debug)]
+/// Where a session finds and puts its files.
+#[derive(Debug, Clone)]
+pub struct Setup {
+    /// The folder holding `harletty_dolby_bridge` / `harletty_dts_bridge`.
+    pub bridge_dir: PathBuf,
+    /// Where the generated speaker layout is written.
+    pub work_dir: PathBuf,
+    /// An engine configuration (Omniphony's `config.yaml` schema), if any.
+    /// `None` keeps the engine's defaults and reads no file.
+    pub engine_config: Option<PathBuf>,
+}
+
+/// The file name of a family's bridge library on this platform.
+pub fn bridge_file_name(family: &str) -> String {
+    if cfg!(windows) {
+        format!("harletty_{family}_bridge.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("libharletty_{family}_bridge.dylib")
+    } else {
+        format!("libharletty_{family}_bridge.so")
+    }
+}
+
 pub struct Session {
+    engine: Engine,
     codec: &'static Codec,
     rate: u32,
     mask: u32,
     channels: u32,
     clock: OutputClock,
-    /// The first timestamp of the current timeline, and the frames produced
-    /// since: output is counted from that origin, not summed from rounded
-    /// gaps, so nothing drifts.
-    origin_hns: Option<i64>,
-    emitted_frames: u64,
+    rate_warned: bool,
 }
 
-/// More than this much between two timestamps is a gap in the stream, not
-/// audio to fill (and would be a huge buffer).
-const MAX_GAP_SECONDS: u32 = 1;
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("codec", &self.codec.name)
+            .field("rate", &self.rate)
+            .field("mask", &self.mask)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Write the layout for `mask` into `dir`, unless that file is already there.
+fn write_layout(dir: &Path, mask: u32) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(format!("layout-{mask:X}.yaml"));
+    let yaml = layout::layout_yaml(mask);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(yaml.as_str()) {
+        std::fs::write(&path, yaml).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
+
+/// The engine configuration that binauralises, written to `dir`.
+fn write_binaural_config(dir: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join("engine-binaural.yaml");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(layout::BINAURAL_CONFIG) {
+        std::fs::write(&path, layout::BINAURAL_CONFIG)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
 
 impl Session {
-    pub fn new(codec: &'static Codec, rate: u32, mask: u32) -> Self {
-        let mask = layout::effective_mask(mask);
-        Self {
+    /// Start a decoder for `codec` at `rate`, rendering to `mask`'s speakers.
+    /// Slow (the engine builds its panning tables): done when the input type is
+    /// set, not per packet.
+    pub fn open(
+        codec: &'static Codec,
+        rate: u32,
+        mask: u32,
+        setup: &Setup,
+    ) -> Result<Self, String> {
+        let plan = layout::plan(mask);
+        let bridge = setup.bridge_dir.join(bridge_file_name(codec.bridge));
+        if !bridge.is_file() {
+            return Err(format!("{}: not found", bridge.display()));
+        }
+        let layout_path = write_layout(&setup.work_dir, plan.render_mask)?;
+        // A configuration of the user's own is theirs; otherwise the one that
+        // binauralises, when the output is too small to pan to.
+        let engine_config = match (&setup.engine_config, plan.binaural) {
+            (Some(path), _) => Some(path.clone()),
+            (None, true) => Some(write_binaural_config(&setup.work_dir)?),
+            (None, false) => None,
+        };
+        let started = std::time::Instant::now();
+        let engine = Engine::from_paths(
+            engine_config.as_deref(),
+            Some(&layout_path),
+            &[bridge],
+            Some(codec.input_codec),
+            rate,
+        )
+        .map_err(|e| format!("{e:#}"))?;
+        log::info!(
+            "engine for {} ready in {:.0?} ({}, output mask 0x{:X})",
+            codec.name,
+            started.elapsed(),
+            if plan.binaural {
+                "binaural"
+            } else {
+                "speakers"
+            },
+            plan.output_mask
+        );
+
+        // The engine's channels must be the output's speakers, in order: the
+        // output type promises it.
+        let mask = plan.output_mask;
+        let (want, got) = (layout::labels(mask), engine.channel_layout());
+        if want != got {
+            return Err(format!(
+                "the engine renders {got:?}, the output type needs {want:?}"
+            ));
+        }
+        let channels = engine.channel_count();
+        Ok(Self {
+            engine,
             codec,
             rate,
             mask,
-            channels: mask.count_ones(),
+            channels,
             clock: OutputClock::new(rate),
-            origin_hns: None,
-            emitted_frames: 0,
-        }
+            rate_warned: false,
+        })
     }
 
     pub fn codec(&self) -> &'static Codec {
@@ -70,132 +172,56 @@ impl Session {
         self.channels
     }
 
-    /// One compressed access unit. `pts_hns` is its sample time, if it had one.
-    pub fn push(&mut self, _data: &[u8], pts_hns: Option<i64>) -> Vec<Block> {
-        let Some(pts) = pts_hns else {
-            return Vec::new();
-        };
-        let Some(origin) = self.origin_hns else {
-            self.start_timeline(pts);
-            return Vec::new(); // the first timestamp only starts the timeline
-        };
-        let max_gap = (self.rate * MAX_GAP_SECONDS) as i64;
-        let frames = hns_to_frames(pts - origin, self.rate) - self.emitted_frames as i64;
-        if frames > max_gap || frames < -max_gap {
-            self.start_timeline(pts); // a gap or a jump: start over from here
-            return Vec::new();
-        }
-        if frames <= 0 {
-            return Vec::new();
-        }
-        let frames = frames as usize;
-        // The clock was anchored at the origin: blocks tile on from there.
-        let (start_hns, duration_hns) = self.clock.place(None, 0, frames as u64);
-        self.emitted_frames += frames as u64;
-        vec![Block {
-            start_hns,
-            duration_hns,
-            frames,
-            samples: vec![0.0; frames * self.channels as usize],
-        }]
+    /// One compressed access unit (a Matroska block's payload). `pts_hns` is
+    /// its sample time, if it had one.
+    pub fn push(&mut self, data: &[u8], pts_hns: Option<i64>) -> Result<Vec<Block>, String> {
+        self.engine.set_input_pts(pts_hns.map(hns_to_us));
+        let chunks = self
+            .engine
+            .process(data, RInputTransport::Raw, 0)
+            .map_err(|e| format!("{e:#}"))?;
+        self.blocks(chunks)
     }
 
-    fn start_timeline(&mut self, pts: i64) {
-        self.origin_hns = Some(pts);
-        self.emitted_frames = 0;
-        self.clock.anchor(pts, 0);
+    /// End of stream: whatever the engine still holds.
+    pub fn drain(&mut self) -> Result<Vec<Block>, String> {
+        let chunks = self.engine.drain().map_err(|e| format!("{e:#}"))?;
+        self.blocks(chunks)
     }
 
-    /// End of stream: what is still held. Nothing is, in Phase 1.
-    pub fn drain(&mut self) -> Vec<Block> {
-        Vec::new()
-    }
-
-    /// A seek or discontinuity.
+    /// A seek or discontinuity: forget the stream, keep the setup.
     pub fn reset(&mut self) {
-        self.origin_hns = None;
-        self.emitted_frames = 0;
+        self.engine.reset();
         self.clock.reset();
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::portable::clock::hns_to_frames;
-    use crate::portable::codecs::CODECS;
-
-    fn session() -> Session {
-        Session::new(&CODECS[0], 48_000, 0x63F)
-    }
-
-    #[test]
-    fn output_is_laid_out_for_the_mask() {
-        let s = session();
-        assert_eq!((s.channels(), s.mask(), s.rate()), (8, 0x63F, 48_000));
-        assert_eq!(Session::new(&CODECS[0], 48_000, 0).channels(), 2);
-    }
-
-    #[test]
-    fn silence_fills_the_time_between_timestamps() {
-        let mut s = session();
-        assert!(s.push(b"x", Some(1_000_000)).is_empty()); // starts the timeline
-        let blocks = s.push(b"x", Some(1_100_000)); // +10 ms
-        assert_eq!(blocks.len(), 1);
-        let block = &blocks[0];
-        assert_eq!(block.start_hns, 1_000_000);
-        assert_eq!(block.frames, 480);
-        assert_eq!(block.duration_hns, 100_000);
-        assert_eq!(block.samples.len(), 480 * 8);
-        assert!(block.samples.iter().all(|&v| v == 0.0));
-    }
-
-    #[test]
-    fn a_missing_duration_does_not_run_the_timeline_ahead() {
-        // Blocks 0.83 ms apart (40 frames, not a whole number of 100 ns units):
-        // 1000 of them cover 0.83 s, not 100 s, and not a frame short.
-        let mut s = session();
-        let mut frames = 0;
-        for i in 0..=1000 {
-            for block in s.push(b"x", Some(i * 8_333)) {
-                frames += block.frames as i64;
-            }
+    fn blocks(&mut self, chunks: Vec<RenderedAudio>) -> Result<Vec<Block>, String> {
+        let engine_rate = self.engine.sample_rate();
+        if engine_rate != self.rate && !self.rate_warned {
+            self.rate_warned = true;
+            log::warn!(
+                "the stream is {engine_rate} Hz, the output type says {} Hz: not handled yet",
+                self.rate
+            );
         }
-        assert_eq!(frames, hns_to_frames(1000 * 8_333, 48_000));
-    }
-
-    #[test]
-    fn consecutive_blocks_end_where_the_next_starts() {
-        // 40 frames every 8_333 units (not a whole number of units each).
-        let mut s = session();
-        let mut end = None;
-        for i in 0..=2000 {
-            for block in s.push(b"x", Some(i * 8_333)) {
-                if let Some(end) = end {
-                    assert_eq!(block.start_hns, end, "block at input {i}");
-                }
-                end = Some(block.start_hns + block.duration_hns);
+        let latency = frames_to_hns(self.engine.output_latency_samples(), self.rate);
+        let mut blocks = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            if chunk.n_channels != self.channels {
+                return Err(format!(
+                    "the engine returned {} channels, expected {}",
+                    chunk.n_channels, self.channels
+                ));
             }
+            let pts = chunk.input_pts_us.map(us_to_hns);
+            let (start_hns, duration_hns) = self.clock.place(pts, latency, chunk.n_frames as u64);
+            blocks.push(Block {
+                start_hns,
+                duration_hns,
+                frames: chunk.n_frames,
+                samples: chunk.samples,
+            });
         }
-        assert!(end.is_some());
-    }
-
-    #[test]
-    fn a_gap_or_a_jump_back_produces_nothing() {
-        let mut s = session();
-        s.push(b"x", Some(0));
-        assert!(s.push(b"x", Some(50_000_000)).is_empty()); // 5 s: a gap
-        assert!(s.push(b"x", Some(40_000_000)).is_empty()); // backwards
-        assert!(s.push(b"x", None).is_empty());
-    }
-
-    #[test]
-    fn reset_starts_a_new_timeline() {
-        let mut s = session();
-        s.push(b"x", Some(0));
-        s.reset();
-        assert!(s.push(b"x", Some(90_000_000)).is_empty());
-        assert_eq!(s.push(b"x", Some(90_100_000))[0].start_hns, 90_000_000);
-        assert!(s.drain().is_empty());
+        Ok(blocks)
     }
 }
