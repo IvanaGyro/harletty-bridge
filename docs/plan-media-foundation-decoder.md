@@ -128,9 +128,14 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   list
   (<https://learn.microsoft.com/en-us/windows/win32/api/mfobjects/nf-mfobjects-imfplugincontrol-setpreferredclsid>),
   so an installer cannot make WMP prefer our MFT over Microsoft's Dolby
-  decoder. For TrueHD and DTS there is no in-box competitor. For E-AC-3/AC-3,
-  enumeration order decides. *Verify* in Phase 0 which one WMP takes when both
-  are registered.
+  decoder. **Corrected by Phase 0:** Windows does register "IEC-61937
+  converter" MFTs in the decoder category for TrueHD, DTS-HD and
+  AC-3/E-AC-3, so TrueHD and DTS-HD do have in-box candidates. They wrap a
+  stream for passthrough and cannot produce the float PCM a player asks
+  for. Measured (docs/media-foundation-findings.md): the WinRT `MediaPlayer`
+  chose our registered decoder over the TrueHD converter. Still to check:
+  which one WMP takes, and for E-AC-3/AC-3 whether it prefers Microsoft's
+  "Dolby Digital Plus Decoder MFT" (listed there as well).
 - **F6. Media Foundation float PCM cannot carry objects.** A decoder's PCM
   output (`MFAudioFormat_Float` with `WAVEFORMATEXTENSIBLE` and a channel
   mask) has fixed speaker channels only. Objects must therefore be rendered
@@ -492,6 +497,27 @@ Changed:
 
 ### Phase 0: facts and a go/no-go
 
+**Status.** Steps 4.1 to 4.3 are done, and the results are in
+`docs/media-foundation-findings.md`:
+
+- A decoder registered machine-wide is listed by `MFTEnumEx` and the WinRT
+  `CodecQuery` in a desktop process (F11, partly verified).
+- On a desktop (Windows ARM64) the WinRT `MediaPlayer` instantiated the
+  registered stub for a TrueHD MKV, ahead of Windows' converter.
+- The stub and the probe were throwaway. Their code is kept on the branch
+  `feat/mf-phase0-tools` (pull request 2) and is not part of `dev/wmp`;
+  Phase 1 does not depend on it. Rebuild them from the descriptions below
+  only if a later question needs them.
+- Playback with the stub stalled at about 0.8 s. The first suspect is the
+  stub's duration fallback (100 ms of silence for every input sample that has
+  no duration, which TrueHD blocks do not): the real transform places each
+  block by its input timestamp and the decoded frame count instead (see
+  "Timestamps"), and Phase 1's desktop check watches for the same stall.
+
+**Still open (desktop):** WMP Legacy, FluentFin (direct play) and the Media
+Player app (step 4.4), the app-service route if needed (4.5), `mf-probe`
+(step 1), and the go/no-go (step 5).
+
 Settles F1, F5, F11, F12 and D8 on real machines before any MFT code is
 written.
 
@@ -609,7 +635,7 @@ written.
 Done when:
 
 - `docs/media-foundation-findings.md` answers every question above,
-  including the player matrix;
+  including the player matrix (the WinRT row is filled in);
 - the codec table in this file is corrected to the observed GUIDs;
 - F11 and F12 are marked verified or refuted;
 - the WMP go/no-go is "go".
