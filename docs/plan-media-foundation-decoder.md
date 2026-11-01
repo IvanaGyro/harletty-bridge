@@ -442,10 +442,12 @@ are ones `label_for_name` maps to the label in the third column:
 | `SPEAKER_TOP_BACK_RIGHT` | 0x20000 | TBR | Tbr | 1, -1, 1 |
 
 - **Fewer than three speakers** (stereo, mono, headphones): the engine's
-  panner needs at least three, so the session renders to a full virtual
-  7.1.4 layout and the engine's binaural stage folds it to stereo
-  (`render.binaural.output_mode: binaural`, written to a small config file
-  next to the layout). Measured on the repository's fixtures: the stereo
+  panner needs at least three speakers to start, so the session gives it a
+  7.1.4 layout and switches on the binaural stage
+  (`render.binaural.output_mode: binaural`, in a small config file written
+  next to the layout). In that mode the engine bypasses the VBAP panner and
+  renders every bed channel and object straight to two channels through an
+  HRTF (Omniphony `BINAURAL.md`); the 7.1.4 layout only places the beds. Measured on the repository's fixtures: the stereo
   output carries signal and the channel order matches. Mono output is given
   stereo.
 - Unit test: for every mask the table covers, the YAML parses as an

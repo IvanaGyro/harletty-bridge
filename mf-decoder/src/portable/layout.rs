@@ -88,9 +88,10 @@ pub struct Plan {
     pub output_mask: u32,
     /// The speaker layout the engine pans to.
     pub render_mask: u32,
-    /// Fold the rendered layout down to two channels through an HRTF. The
-    /// engine's panner needs at least three speakers, so stereo (and mono)
-    /// output is rendered binaurally from a full layout.
+    /// Render straight to two channels through an HRTF, bypassing the panner
+    /// (the engine's binaural stage). The engine will not start with fewer
+    /// than three speakers, so stereo (and mono) output gets a full layout
+    /// that only places the beds.
     pub binaural: bool,
 }
 
