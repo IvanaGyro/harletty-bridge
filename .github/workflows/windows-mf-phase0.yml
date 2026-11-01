@@ -82,8 +82,10 @@ jobs:
       - name: Register the stub (TrueHD, DTS-HD, DTS)
         shell: pwsh
         run: |
-          regsvr32 /s "$PWD\target\release\harletty_mf_stub.dll"
-          if ($LASTEXITCODE -ne 0) { throw "regsvr32 failed: $LASTEXITCODE" }
+          # regsvr32 is a GUI program: PowerShell does not wait for it, so run
+          # it with Start-Process to get a real exit code.
+          $p = Start-Process regsvr32 -ArgumentList '/s', "$PWD\target\release\harletty_mf_stub.dll" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "regsvr32 failed: $($p.ExitCode)" }
 
       - name: Probe with the stub registered
         shell: pwsh
@@ -99,7 +101,7 @@ jobs:
       - name: Unregister the stub
         if: always()
         shell: pwsh
-        run: regsvr32 /s /u "$PWD\target\release\harletty_mf_stub.dll"
+        run: Start-Process regsvr32 -ArgumentList '/s', '/u', "$PWD\target\release\harletty_mf_stub.dll" -Wait
 
       - name: Upload the tools and the results
         if: always()
