@@ -166,3 +166,78 @@ fn a_missing_bridge_is_an_error_naming_the_file() {
         "{err}"
     );
 }
+
+/// A deterministic stream of pseudo-random numbers, so a failure reproduces.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+}
+
+/// Feed `stream` to a fresh session in 1 KiB pieces, ignoring what comes out:
+/// the point is only that it returns. Errors are fine (a host reports them and
+/// goes on); a panic or a hang is not.
+fn survives(option: &str, stream: Vec<u8>, label: &str) {
+    let (done, result) = std::sync::mpsc::channel();
+    let option = option.to_owned();
+    let tag = label.to_owned();
+    std::thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(|| {
+            let mut session =
+                Session::open(codec(&option), 48_000, STEREO, &setup(&tag)).expect("open");
+            for piece in stream.chunks(1024) {
+                // The transform resets after an error; so does this.
+                if session.push(piece, None).is_err() {
+                    session.reset();
+                }
+            }
+            let _ = session.drain();
+        });
+        let _ = done.send(outcome.is_ok());
+    });
+    match result.recv_timeout(std::time::Duration::from_secs(120)) {
+        Ok(true) => {}
+        Ok(false) => panic!("{label}: the session panicked"),
+        Err(_) => panic!("{label}: the session did not return"),
+    }
+}
+
+#[test]
+fn corrupted_and_truncated_streams_never_panic_or_hang() {
+    for (option, fixture) in [("eac3", EAC3), ("dts", DTS)] {
+        let mut rng = Lcg(0x5EED);
+        // Truncated anywhere, including mid-frame.
+        for cut in [1, 7, fixture.len() / 3, fixture.len() / 2 + 1] {
+            survives(
+                option,
+                fixture[..cut].to_vec(),
+                &format!("{option}-cut{cut}"),
+            );
+        }
+        // Bits flipped: a few, many, and in the header of the first frame.
+        for (n, label) in [(1, "one"), (16, "few"), (fixture.len() / 8, "many")] {
+            let mut bytes = fixture.to_vec();
+            for _ in 0..n {
+                let at = rng.next() as usize % bytes.len();
+                bytes[at] ^= 1 << (rng.next() % 8);
+            }
+            survives(option, bytes, &format!("{option}-flip-{label}"));
+        }
+        let mut head = fixture.to_vec();
+        for byte in head.iter_mut().take(16) {
+            *byte ^= 0xFF;
+        }
+        survives(option, head, &format!("{option}-head"));
+        // Garbage, and nothing sensible at all.
+        let garbage: Vec<u8> = (0..64 * 1024).map(|_| rng.next() as u8).collect();
+        survives(option, garbage, &format!("{option}-garbage"));
+        survives(option, vec![0; 64 * 1024], &format!("{option}-zeros"));
+        survives(option, vec![0xFF; 64 * 1024], &format!("{option}-ones"));
+    }
+}

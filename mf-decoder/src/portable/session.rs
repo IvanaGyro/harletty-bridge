@@ -203,6 +203,10 @@ impl Session {
     /// One compressed access unit (a Matroska block's payload). `pts_hns` is
     /// its sample time, if it had one.
     pub fn push(&mut self, data: &[u8], pts_hns: Option<i64>) -> Result<Vec<Block>, String> {
+        #[cfg(test)]
+        if test_hooks::PANIC_NEXT_PUSH.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("injected panic in Session::push");
+        }
         self.engine.set_input_pts(pts_hns.map(hns_to_us));
         let chunks = self
             .engine
@@ -252,4 +256,13 @@ impl Session {
         }
         Ok(blocks)
     }
+}
+
+/// Hooks for the unit tests only: not in the DLL that ships.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::sync::atomic::AtomicBool;
+
+    /// Makes the next `Session::push` panic.
+    pub static PANIC_NEXT_PUSH: AtomicBool = AtomicBool::new(false);
 }

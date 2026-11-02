@@ -10,6 +10,11 @@
 // file). They are exports on purpose; the warning is not about anything else.
 #![allow(linker_messages)]
 
+// The unit tests include the COM tests' helpers (tests/common), which name this
+// crate as an outside user does.
+#[cfg(test)]
+extern crate self as harletty_mf;
+
 pub mod portable;
 
 #[cfg(windows)]
