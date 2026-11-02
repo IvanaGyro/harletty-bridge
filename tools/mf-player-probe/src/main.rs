@@ -16,7 +16,8 @@
 //! Soak (Phase 3, step 6): `mf-player-probe FILE --soak SECONDS` plays the file
 //! for that long, seeking to a pseudo-random position every `--seek-every`
 //! seconds (default 20) and printing the working set and handle count every
-//! `--report-every` seconds (default 30). At exit it lists the DLLs loaded in
+//! `--report-every` seconds (default 30). The file loops, so a short one does
+//! for a long soak. At exit it lists the DLLs loaded in
 //! the process and says whether any is a harletty bridge: with the decoders
 //! linked into `harletty_mf.dll` there must be none. This replaces the plan's
 //! `tasklist /m` check on a machine whose Windows Media Player is 32-bit.
@@ -312,6 +313,10 @@ mod windows_main {
                 Ok(())
             },
         ))?;
+        // A soak outlasts a short file: replay it instead of idling at the end.
+        if soak > 0 {
+            player.SetIsLoopingEnabled(true)?;
+        }
         player.SetSource(&source)?;
         player.Play()?;
 
