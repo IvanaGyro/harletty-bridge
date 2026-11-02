@@ -98,7 +98,16 @@ jobs:
             harletty-bridge/target/release/harletty_dts_bridge.dll
             harletty-bridge/target/release/harletty_iamf_bridge.dll
             harletty-bridge/target/release/harletty.exe
-            harletty-bridge/target/release/harletty_mf.dll
+          if-no-files-found: error
+          retention-days: 30
+
+      # The decoder for Windows Media Player and other Media Foundation
+      # players: a set of its own, no bridge DLL (plan D10).
+      - name: Upload the Media Foundation decoder
+        uses: actions/upload-artifact@v7
+        with:
+          name: harletty-mf-windows-arm64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: harletty-bridge/target/release/harletty_mf.dll
           if-no-files-found: error
           retention-days: 30
 
@@ -134,19 +143,16 @@ jobs:
         env:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
-          cargo build --release --locked -p harletty-mf-decoder -p harletty-dolby-bridge -p harletty-dts-bridge
+          cargo build --release --locked -p harletty-mf-decoder
           cargo test --release --locked -p harletty-mf-decoder
         working-directory: harletty-bridge
 
-      # The decoder loads the bridge DLLs from its own folder: keep the three
-      # together.
-      - name: Upload the decoder and its bridges
+      # One file: the Dolby and DTS decoders are linked in (plan D10).
+      - name: Upload the decoder
         uses: actions/upload-artifact@v7
         with:
           name: harletty-mf-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             harletty-bridge/target/release/harletty_mf.dll
-            harletty-bridge/target/release/harletty_dolby_bridge.dll
-            harletty-bridge/target/release/harletty_dts_bridge.dll
           if-no-files-found: error
           retention-days: 30

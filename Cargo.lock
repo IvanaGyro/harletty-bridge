@@ -870,6 +870,7 @@ dependencies = [
 name = "harletty-mf-decoder"
 version = "0.9.0"
 dependencies = [
+ "anyhow",
  "bridge-common",
  "bridge-family-dolby",
  "bridge-family-dts",
@@ -878,6 +879,7 @@ dependencies = [
  "harletty-dts-bridge",
  "log",
  "orender_engine",
+ "renderer",
  "serde",
  "serde_yaml_ng",
  "windows 0.62.2",

@@ -278,10 +278,7 @@ impl IMFTransform_Impl for Decoder_Impl {
                     super::endpoint::speaker_mask().unwrap_or(layout::STEREO)
                 }
             };
-            let setup = super::paths::session_setup(&state.config).map_err(|e| {
-                log::error!("{e}");
-                windows::core::Error::from(MF_E_INVALIDMEDIATYPE)
-            })?;
+            let setup = super::paths::session_setup();
             let session = Session::open(codec, rate, mask, &setup).map_err(|e| {
                 // Not an error to the player: it tries the next decoder.
                 log::error!("cannot start {}: {e}", codec.name);

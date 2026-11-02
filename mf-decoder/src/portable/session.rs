@@ -1,8 +1,8 @@
 //! One stream's decoder, as the transform drives it: compressed access units
 //! in, interleaved float blocks out, each placed on the timeline.
 //!
-//! The decoding is `orender_engine`'s: it loads the family's bridge DLL, which
-//! decodes the stream, and renders the result (objects included) to the speaker
+//! The decoding is `orender_engine`'s, over the Dolby and DTS families linked
+//! into this library (`assemble`): it decodes the stream and renders the result (objects included) to the speaker
 //! layout generated from the channel mask. Everything here is the adaptation:
 //! the layout file, the check that the engine's channels are the mask's in
 //! order, the timestamps, the errors.
@@ -25,11 +25,9 @@ pub struct Block {
     pub samples: Vec<f32>,
 }
 
-/// Where a session finds and puts its files.
+/// Where a session puts its files and finds its configuration.
 #[derive(Debug, Clone)]
 pub struct Setup {
-    /// The folder holding `harletty_dolby_bridge` / `harletty_dts_bridge`.
-    pub bridge_dir: PathBuf,
     /// Where the generated speaker layout is written.
     pub work_dir: PathBuf,
     /// An engine configuration (Omniphony's `config.yaml` schema), if any.
@@ -37,7 +35,9 @@ pub struct Setup {
     pub engine_config: Option<PathBuf>,
 }
 
-/// The file name of a family's bridge library on this platform.
+/// The file name of a family's bridge library on this platform: what the
+/// reference session loads (the decoders themselves are linked in).
+#[doc(hidden)]
 pub fn bridge_file_name(family: &str) -> String {
     if cfg!(windows) {
         format!("harletty_{family}_bridge.dll")
@@ -100,11 +100,46 @@ impl Session {
         mask: u32,
         setup: &Setup,
     ) -> Result<Self, String> {
-        let plan = layout::plan(mask);
-        let bridge = setup.bridge_dir.join(bridge_file_name(codec.bridge));
+        Self::start(codec, rate, mask, setup, |config, layout| {
+            super::assemble::engine(config, layout, codec.input_codec, rate)
+        })
+    }
+
+    /// The same session on `Engine::from_paths`, loading the family's bridge
+    /// DLL from `bridge_dir`: what [`open`](Self::open) must equal, for the
+    /// tests that compare them. Not used by the library.
+    #[doc(hidden)]
+    pub fn open_reference(
+        codec: &'static Codec,
+        rate: u32,
+        mask: u32,
+        setup: &Setup,
+        bridge_dir: &Path,
+    ) -> Result<Self, String> {
+        let bridge = bridge_dir.join(bridge_file_name(codec.bridge));
         if !bridge.is_file() {
             return Err(format!("{}: not found", bridge.display()));
         }
+        Self::start(codec, rate, mask, setup, |config, layout| {
+            Engine::from_paths(
+                config,
+                Some(layout),
+                &[bridge.clone()],
+                Some(codec.input_codec),
+                rate,
+            )
+            .map_err(|e| format!("{e:#}"))
+        })
+    }
+
+    fn start(
+        codec: &'static Codec,
+        rate: u32,
+        mask: u32,
+        setup: &Setup,
+        make_engine: impl FnOnce(Option<&Path>, &Path) -> Result<Engine, String>,
+    ) -> Result<Self, String> {
+        let plan = layout::plan(mask);
         let layout_path = write_layout(&setup.work_dir, plan.render_mask)?;
         // A configuration of the user's own is theirs; otherwise the one that
         // binauralises, when the output is too small to pan to.
@@ -114,14 +149,7 @@ impl Session {
             (None, false) => None,
         };
         let started = std::time::Instant::now();
-        let engine = Engine::from_paths(
-            engine_config.as_deref(),
-            Some(&layout_path),
-            &[bridge],
-            Some(codec.input_codec),
-            rate,
-        )
-        .map_err(|e| format!("{e:#}"))?;
+        let engine = make_engine(engine_config.as_deref(), &layout_path)?;
         log::info!(
             "engine for {} ready in {:.0?} ({}, output mask 0x{:X})",
             codec.name,

@@ -18,8 +18,9 @@ pub struct Codec {
     pub input_codec: &'static str,
     /// The `codecs:` name in `mf.yaml` that switches it on and off.
     pub option: &'static str,
-    /// Which bridge plugin decodes it: `dolby` or `dts`
-    /// (`harletty_<family>_bridge`, in the folder of this DLL).
+    /// Which family decodes it: `dolby` or `dts`. (Linked in; the name is also
+    /// the bridge library's, `harletty_<family>_bridge`, that the reference
+    /// session in the tests loads.)
     pub bridge: &'static str,
     /// Registered unless `mf.yaml` says otherwise. E-AC-3 and AC-3 are not:
     /// Microsoft's decoder already plays them.

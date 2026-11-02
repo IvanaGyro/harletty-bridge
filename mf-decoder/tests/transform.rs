@@ -1,12 +1,9 @@
 //! The transform driven through COM, the way a player drives it: class
 //! factory, input type, output type, access units in, audio out, flush, drain.
-//! The decoder is the real one: the engine and the DTS bridge library (which
-//! cargo builds next to this executable because the plugin crates are
-//! dev-dependencies), decoding the repository's DTS core fixture. No
+//! The decoder is the real one: the engine and the DTS family linked into the
+//! library, decoding the repository's DTS core fixture. No
 //! registration, no administrator rights, no audio device.
 #![cfg(windows)]
-
-use std::sync::Once;
 
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, IClassFactory};
@@ -22,17 +19,6 @@ const DTS: usize = 1;
 const PIECE: usize = 1024;
 
 fn decoder() -> IMFTransform {
-    static ENV: Once = Once::new();
-    ENV.call_once(|| {
-        // The bridge libraries sit next to this executable.
-        let dir = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        // SAFETY: set once, before any thread of ours reads it.
-        unsafe { std::env::set_var("HARLETTY_MF_BRIDGE_DIR", dir) };
-    });
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap();

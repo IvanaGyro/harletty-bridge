@@ -1,8 +1,10 @@
 //! The session on the real engine and the real bridge libraries, decoding the
 //! repository's own fixtures (the E-AC-3 JOC and DTS ones the bridge tests use).
 //!
-//! The bridge libraries are the cdylibs cargo builds because the plugin crates
-//! are dev-dependencies; they sit next to this test's executable.
+//! The decoders are linked into the library (plan D10). The reference session
+//! loads the same families as bridge DLLs through `Engine::from_paths`: the
+//! cdylibs cargo builds because the plugin crates are dev-dependencies, next to
+//! this test's executable.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +33,6 @@ fn bridge_dir() -> PathBuf {
 fn setup(tag: &str) -> Setup {
     let work = std::env::temp_dir().join(format!("harletty-mf-{tag}-{}", std::process::id()));
     Setup {
-        bridge_dir: bridge_dir(),
         work_dir: work,
         engine_config: None,
     }
@@ -125,11 +126,41 @@ fn reset_forgets_the_stream_but_not_the_setup() {
     assert_eq!(second[0].start_hns, first[0].start_hns);
 }
 
+/// The linked-in session is the bridge-DLL session: same engine, same
+/// output, bit for bit, on every fixture and every output.
+#[test]
+fn linked_in_decoders_equal_the_bridge_dlls() {
+    let cases: [(&str, &[u8], u32); 4] = [
+        ("eac3", EAC3, SEVEN_ONE_FOUR),
+        ("eac3", EAC3, STEREO),
+        ("dts", DTS, STEREO),
+        ("dts", DTS, SEVEN_ONE_FOUR),
+    ];
+    for (option, stream, mask) in cases {
+        let codec = codec(option);
+        let mut linked = Session::open(codec, 48_000, mask, &setup("linked")).expect("linked");
+        let mut reference =
+            Session::open_reference(codec, 48_000, mask, &setup("ref"), &bridge_dir())
+                .expect("reference");
+        let (a, b) = (
+            decode(&mut linked, stream, 4 * 1024),
+            decode(&mut reference, stream, 4 * 1024),
+        );
+        assert!(!a.is_empty(), "{option} 0x{mask:X}: no output");
+        assert_eq!(a, b, "{option} 0x{mask:X}: the two sessions differ");
+    }
+}
+
 #[test]
 fn a_missing_bridge_is_an_error_naming_the_file() {
-    let mut setup = setup("missing");
-    setup.bridge_dir = Path::new("no-such-folder").to_path_buf();
-    let err = Session::open(codec("dts"), 48_000, STEREO, &setup).unwrap_err();
+    let err = Session::open_reference(
+        codec("dts"),
+        48_000,
+        STEREO,
+        &setup("missing"),
+        Path::new("no-such-folder"),
+    )
+    .unwrap_err();
     assert!(
         err.contains("not found") && err.contains("harletty_dts_bridge"),
         "{err}"
