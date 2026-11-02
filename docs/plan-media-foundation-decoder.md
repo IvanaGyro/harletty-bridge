@@ -172,12 +172,24 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   sidecar of that config (`renderer/src/config.rs`, `live_sidecar_path`).
   WMP opening Omniphony's own config could therefore steal Studio's handoff
   state. The MFT uses a config file of its own (D5).
-- **F10. The engine needs bridge files, found by absolute path.**
-  `Engine::from_paths` loads the bridges it is given through `abi_stable`.
-  `BridgeLibs` / `LoadedBridge::open` (`orender_engine/src/bridge_loader.rs`)
-  accept in-process root modules, but `from_paths` does not take them. So
-  linking the bridges into one file needs a new upstream constructor
-  (Phase 5).
+- **F10. `from_paths` needs bridge files, but the engine does not.**
+  `Engine::from_paths` loads the bridges it is given through `abi_stable`,
+  from files found by absolute path. Below it, at the pinned ref, everything
+  is public: `BridgeLibs::new(Vec<BridgeLibRef>)` and `LoadedBridge::open`
+  (`orender_engine/src/bridge_loader.rs`) take in-process root modules,
+  `Engine::new(LoadedBridge, SpatialRenderer, rate)` takes the result, and
+  the steps `from_paths` runs between the two (`configure_presentation`,
+  `renderer_build::build_spatial_renderer`,
+  `seed_runtime_state_from_render_config`, `prepare_speaker_stage`, the
+  evaluation-grid settle) are `pub` too. Each family's root module comes
+  from `bridge_common::plugin::root_module::<P>()` for a `Plugin` impl. So
+  the decoders can be linked into the MFT with **no upstream change** (D10).
+  - The plugin crates (`harletty-dolby-bridge`, `harletty-dts-bridge`) each
+    carry an `#[export_root_module]`, whose loader symbol has a fixed name
+    (*verify*). Linking both into one cdylib would then clash, so the MFT
+    links the family crates (`bridge-family-dolby`, `bridge-family-dts`) and
+    `bridge-common` instead, with `Plugin` impls of its own, and exports no
+    root module.
 
 - **F11. The WinRT player has more codec sources than WMP, and which apply to
   a desktop process is undocumented.** `Windows.Media.Playback.MediaPlayer`
@@ -257,16 +269,18 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   second ABI handshake. Never call `Engine::enable_osc`. Never call
   `orender_engine::init_live_logging`, which installs the engine's OSC
   logger.
-- **D3. The bridges stay separate files, loaded from the MFT's own folder.**
-  The MFT finds its folder with
+- **D3. Until Phase 3, the decoders are the bridge DLLs, loaded from the
+  MFT's own folder.** This is a stage on the way to D10, not what ships:
+  Phases 1 and 2 are built and tested this way, and Phase 3 step 1 links the
+  decoders in. The MFT finds its folder with
   `GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, <a fn of ours>)` and
   `GetModuleFileNameW`. It passes the absolute paths of
   `harletty_dolby_bridge.dll` and `harletty_dts_bridge.dll` there to
   `Engine::from_paths`. It does not rely on the DLL search order, which in
-  WMP's process starts at WMP's folder. This needs no upstream change. The
-  MFT crate links no decoder, which `check-crate-isolation.sh` enforces
-  (Phase 1).
+  WMP's process starts at WMP's folder. This needs no upstream change. Until
+  Phase 3 the MFT crate links no decoder, which `check-crate-isolation.sh`
+  enforces (Phase 1).
 - **D4. Output: `MFAudioFormat_Float`, the input's sample rate, the PC's
   speaker layout.** The channel mask is read once per stream from the default
   render endpoint (`IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender,
@@ -283,7 +297,8 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   `mf-config.yaml`, next to the DLL, written by the installer. A per-user
   override is `%LOCALAPPDATA%\harletty\mf\config.yaml`, if present, and wins.
   - The engine config is an Omniphony config file (same schema), with
-    `render.osc: false` and no `bridge_path(s)`, since bridges come from D3.
+    `render.osc: false` and no `bridge_path(s)`, since the MFT supplies the
+    decoders itself (D3, then D10).
   - The MFT's own options live in a sibling file, `mf.yaml`, so the engine
     schema stays untouched: `speaker_mask`, `codecs`, `log_level`,
     `log_file`. It is looked up the same way: next to the DLL, overridden by
@@ -314,6 +329,59 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   `MFTRegister` / `MFTUnregister`, so `regsvr32` works. `install.ps1` wraps
   it. Tests do not register anything machine-wide: they use
   `MFTRegisterLocal`, which is in-process and needs no administrator (Phase 2).
+- **D10. What ships is one DLL with the decoders linked in, released as a set
+  of its own, apart from the Omniphony bridges.** (Decided after Phase 1;
+  until then the plan shipped copies of the bridge DLLs in the MFT's folder
+  and left a one-file DLL to Phase 5.)
+  - **What the MFT does not need from Omniphony:** the plugin interface,
+    meaning bridge files, finding them at run time, and the `abi_stable`
+    load and layout check. Those exist so that a host and plugins built
+    apart can meet. The MFT and its decoders are built together, from one
+    commit, for one host, so that boundary only costs: two more files to
+    find inside `wmplayer.exe`, an install that breaks if one is missing or
+    from another build, and a load-time check that can only fail.
+  - **What it keeps:** Omniphony's renderer, `orender_engine`, which renders
+    the objects (D2), and the `bridge_api` types, since the engine takes its
+    decoders through the `FormatBridge` trait, in process as well as from a
+    file. The MFT does not export a root module, so it is not an Omniphony
+    plugin, and Omniphony cannot load it.
+  - **How:** link `bridge-family-dolby`, `bridge-family-dts` and
+    `bridge-common`, and build the session with `Engine::new` over
+    `BridgeLibs::new([dolby, dts])` (F10). That means the MFT assembles the
+    engine itself, mirroring what `from_paths` does after `load_bridges`, at
+    the pinned ref.
+    - That copy is what the MFT should own anyway. It loads its config with
+      `Config::load_or_default_with_status`, which leaves the live-handoff
+      sidecar alone (F9), and logs the status to the MFT's log (that
+      function's own parse warning goes to stderr, which a player discards). It skips the overlay prefs, the OSC config-path
+      bookkeeping and the bridge-path recording, all of which are Studio's
+      concerns and process-wide state in a player (Risks).
+    - It can drift from upstream. A test feeds every fixture to both the
+      in-process session and `from_paths` over the bridge cdylibs, and
+      checks the output is identical. A pin bump that adds a setup step to
+      `from_paths` fails there, not on a user's machine.
+    - An upstream `Engine::from_libs` would remove the copy. It is a
+      clean-up (Phase 5), not a blocker.
+  - **Two release sets, not one.** The bridge archive stays what it is,
+    Omniphony plugins for every platform. The MFT archive holds
+    `harletty_mf.dll` and no bridge DLL. Both are built in the same
+    `release.yml` run, from the same commit, with the same version. One set
+    serving both is rejected:
+    - **Their compatibility differs.** A bridge loads only in an Omniphony
+      built against the same `bridge_api` minor (`.omniphony-ref`). The MFT
+      carries its own engine, so it has no such constraint. If WMP used
+      the user's Omniphony bridges, updating either one could break the
+      other.
+    - **They install differently.** Omniphony finds bridges in a folder the
+      user picks, with no administrator. The MFT is registered machine-wide
+      by an administrator (D9) and loaded by every Media Foundation process.
+      A shared folder would make an Omniphony upgrade a change to what every
+      player on the machine loads.
+    - **Their audiences differ.** Most WMP users have no Omniphony, and the
+      MFT is Windows only, x64 and ARM64. The bridges ship for Linux, macOS
+      and Windows.
+    - **Sharing saves nothing that matters.** The duplicated decoder code is
+      a few MB on disk and one more link step in CI.
 
 Fixed identifiers, so every phase and every machine agree:
 
@@ -335,9 +403,11 @@ wmplayer.exe
                harletty_mf.dll  (IMFTransform, synchronous, 1 in / 1 out)
                  com/   IMFTransform ⇄ portable::Session
                  portable/ Session ── orender_engine::Engine
-                                     ├─ harletty_dolby_bridge.dll  (TrueHD, E-AC-3)
-                                     ├─ harletty_dts_bridge.dll    (DTS family)
+                                     ├─ bridge-family-dolby, linked in  (TrueHD, E-AC-3)
+                                     ├─ bridge-family-dts, linked in    (DTS family)
                                      └─ VBAP / binaural render to the generated layout
+                 (until Phase 3, the two families are harletty_dolby_bridge.dll
+                  and harletty_dts_bridge.dll next to harletty_mf.dll: D3)
                          │
                          ▼  float32 PCM IMFSample, WAVEFORMATEXTENSIBLE mask = endpoint's
  └─ Streaming Audio Renderer (SAR) ─ WASAPI shared mode ─ speakers
@@ -489,6 +559,8 @@ Changed:
   `harletty-mf-decoder "Media Foundation decoder"` that it does not depend on
   `truehd eac3 dca auro iamf-dec iamf-obu iamf-codecs damf clap indicatif
   env_logger` (D3: the decoders come from the bridge DLLs at run time).
+  Phase 3 narrows it to what D10 allows: the Dolby and DTS families, and
+  nothing of IAMF or of the CLI.
 - `.github/workflows/windows-arm64.yml` and a new x64 job: Phases 1, 2 and 4.
 - `.github/workflows/release.yml`: Phase 4.
 - `README.md`: Phase 4, one short section linking `docs/media-foundation.md`.
@@ -750,50 +822,74 @@ Done when:
 - seeking works and keeps lip-sync; pause/resume and stop/play work;
 - WMP's progress bar matches the audio.
 
-### Phase 3: robustness and options
+### Phase 3: one DLL, robustness and options
 
-1. **Fuzz-ish hardening:** truncated and garbage input (bit-flipped fixture
+1. **Link the decoders in (D10).** First, so that every later step, the
+   soak test included, runs on the binary that ships.
+   - `mf-decoder` depends on `bridge-family-dolby`, `bridge-family-dts` and
+     `bridge-common`, and defines a `Plugin` impl per family. It never
+     depends on the plugin crates, whose root-module exports would clash
+     (F10), and exports no root module itself.
+   - `portable/session.rs` builds the engine with `Engine::new` over
+     `BridgeLibs::new([dolby, dts])`, following `from_paths` at the pinned
+     ref minus the parts D10 drops. A comment names the commit it follows.
+     The folder lookup and the bridge paths of D3 go.
+   - The `from_paths` session stays, test-only, as the reference: a portable
+     test feeds every fixture to both and asserts identical output, with the
+     bridge cdylibs kept as dev-dependencies for it.
+   - `check-crate-isolation.sh`: the MFT may now link the Dolby and DTS
+     families. It must still not depend on `bridge-family-iamf`,
+     `iamf-dec`, `iamf-obu`, `iamf-codecs`, `clap`, `indicatif` or
+     `env_logger`, nor on `harletty-dolby-bridge` / `harletty-dts-bridge`.
+   - **(Windows desktop)** With only `harletty_mf.dll` in its folder, WMP
+     plays the Phase 2 set, and `tasklist /m` shows no bridge DLL in
+     `wmplayer.exe`.
+2. **Fuzz-ish hardening:** truncated and garbage input (bit-flipped fixture
    blocks) must never panic out or hang. A `cfg(windows)` test drives the
    transform directly with corrupted samples.
-2. **Panic path test:** a test-only codec that panics (behind
+3. **Panic path test:** a test-only codec that panics (behind
    `#[cfg(test)]`) shows `E_UNEXPECTED` comes back, the next sample decodes,
    and the process lives.
-3. **Device change:** the mask is read when the session is built. When the
+4. **Device change:** the mask is read when the session is built. When the
    default endpoint changes mid-file, the next file uses the new one.
    Document it. Rebuilding mid-stream through `MF_E_TRANSFORM_STREAM_CHANGE`
    is optional, and only if Phase 0 showed WMP renegotiates cleanly.
-4. **`mf.yaml` options:** `speaker_mask` (hex), `codecs` (`[truehd, dts,
+5. **`mf.yaml` options:** `speaker_mask` (hex), `codecs` (`[truehd, dts,
    eac3, ac3]`), `log_level`, `log_file`. Plus the engine's own options
    through `config.yaml`: binaural, DRC (`render.drc` or the engine's
    equivalent), presentation. Test that each is honoured (portable tests).
-5. **Memory and handles:** play and seek a 2-hour file in a loop for an hour
+6. **Memory and handles:** play and seek a 2-hour file in a loop for an hour
    (Windows desktop, with Task Manager or `perfmon`). Working set and handle
    count must stay flat.
 
-Done when the tests pass and the soak test shows no growth.
+Done when the tests pass, the shipped DLL loads no bridge DLL, and the soak
+test shows no growth.
 
 ### Phase 4: packaging, release and documentation
 
 1. `install/install.ps1` (requires administrator, `-WithDolbyDigital`
    optional, `-Uninstall` alias):
-   - copy `harletty_mf.dll`, `harletty_dolby_bridge.dll`,
-     `harletty_dts_bridge.dll`, `mf-config.yaml`, `mf.yaml` and the licence
-     texts to `%ProgramFiles%\harletty\mf\`;
+   - copy `harletty_mf.dll`, `mf-config.yaml`, `mf.yaml` and the licence
+     texts to `%ProgramFiles%\harletty\mf\`. No bridge DLL is installed
+     (D10);
    - enable the opt-in codecs in `mf.yaml` when asked;
    - `regsvr32 /s` the DLL; check `MFTEnumEx` finds it;
    - print what was done and how to undo it.
 
    `uninstall.ps1` reverses it, and leaves `%LOCALAPPDATA%\harletty\mf\`
    alone unless `-Purge` is given.
-2. `release.yml`: on Windows x64 and ARM64, build the MFT with the bridges
-   (static CRT, as the bridges are). Stage the licences: extend
-   `scripts/stage-licences.sh` for the new binary, which also carries
+2. `release.yml`: on Windows x64 and ARM64, in the same run as the bridges,
+   build the MFT (static CRT, as the bridges are). Stage the licences:
+   extend `scripts/stage-licences.sh` for the new binary. It carries what
+   the Dolby and DTS bridges carry (their decoders are linked in), plus
    Omniphony's GPL-3.0 engine, `windows` (MIT/Apache-2.0) and Lua/`mlua`
    (MIT); check each actual dependency with `cargo tree`. Then zip
    `harletty-mf-<version>-windows-<arch>.zip` with the install scripts.
-   - The archive holds its own copies of the two bridges: the MFT needs them
-     in its folder (D3), and the bridge archive stays as it is.
-   - The release notes name the Omniphony commit, as for the bridges.
+   - Two sets per release (D10): the bridge archives, unchanged, for
+     Omniphony; and the MFT archives, which hold no bridge DLL.
+   - The release notes name the Omniphony commit, as for the bridges. They
+     say which archive is for which use: Omniphony users take the bridges,
+     Windows Media Player users take the MFT, and neither needs the other.
 3. `docs/media-foundation.md`: what it is for (WMP Legacy, MF desktop apps);
    what it is not for (the new Media Player app, F2/F3, said plainly); and
    install, uninstall, configure, speaker mask, binaural, logs, and
@@ -808,11 +904,12 @@ zips and the clean-machine check passes.
 
 ### Phase 5: optional follow-ups (each its own plan when started)
 
-- **One-file DLL:** an upstream `Engine::from_libs(config, layout, BridgeLibs,
-  codec, rate)` in Omniphony, factoring the part of `from_paths` after
-  `load_bridges` (F10). The MFT can then link `harletty-dolby-bridge` /
-  `harletty-dts-bridge` as rlibs and pass `library()`. Needs an Omniphony
-  pull request and a pin bump, and changes the isolation check.
+- **Upstream `Engine::from_libs`:** a constructor in Omniphony taking
+  `(config, layout, BridgeLibs, codec, rate)`, factored out of the part of
+  `from_paths` after `load_bridges` (F10). The MFT's own copy of that
+  assembly (D10) then shrinks to a call. It needs an Omniphony pull request
+  and a pin bump. The one-file DLL does not wait for it: Phase 3 already
+  ships one.
 - **Spatial objects to Windows Sonic / Dolby Atmos for headphones:** output
   `MFAudioFormat_Float_SpatialObjects` (F6). Research first: which metadata
   format ids the in-box spatial renderers accept, and whether a third-party
@@ -836,7 +933,8 @@ zips and the clean-machine check passes.
 | registration round trip through `MFTEnumEx` | Windows CI (admin) | 1 |
 | decode + render of the fixtures through `Session` | Linux + Windows CI | 2 |
 | MF's own decoder resolution, bit-exact vs `Session` | Windows CI (`MFTRegisterLocal`) | 2 |
-| crate isolation (no decoder linked into the MFT) | Linux CI | 1 |
+| crate isolation (no decoder linked into the MFT; from Phase 3, only the Dolby and DTS families) | Linux CI | 1, 3 |
+| in-process session identical to `from_paths` over the bridge DLLs | Linux + Windows CI | 3 |
 | corrupted input, panic containment | Windows CI | 3 |
 | WMP plays TrueHD/Atmos, DTS/DTS:X MKV; seek, sync | Windows desktop | 1–2 |
 | soak (memory, handles) | Windows desktop | 3 |
@@ -859,7 +957,9 @@ zips and the clean-machine check passes.
   the live sidecar (F9). The MFT calls none of the OSC or logging entry
   points. It must check `Engine::from_paths` for any other process-wide side
   effect at the pinned ref, and note what it found in the Phase 2 pull
-  request.
+  request. From Phase 3 the MFT assembles the engine itself (D10) and leaves
+  out the overlay prefs and the sidecar, so what remains is in `Engine::new`
+  and what it calls.
 - **Decode thread.** The engine's `decode_thread` moves a packet's audio to a
   later call. The MFT's queue and the timestamp rules handle that (output is
   keyed on `input_pts_us`), but drain must then return the held packets.
@@ -873,7 +973,10 @@ zips and the clean-machine check passes.
   licences (`LICENSES/`).
 - **Omniphony API drift.** `orender_engine` is not a stable API. A pin bump
   that changes `Engine::from_paths` or `RenderedAudio` breaks only this
-  crate, and CI shows it at the bump.
+  crate, and CI shows it at the bump. The MFT's copy of the engine assembly
+  (D10) can also fall behind silently, with a step `from_paths` gained. The
+  Phase 3 test comparing it with `from_paths` turns that into a CI failure
+  at the bump.
 
 ## References
 
