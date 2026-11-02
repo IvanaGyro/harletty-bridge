@@ -269,3 +269,111 @@ fn the_linked_in_decoder_equals_the_bridge_dll_on_real_truehd() {
         );
     }
 }
+
+/// This process's memory (MiB) and open handles (file descriptors off Windows).
+fn resources() -> (f64, u64) {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+        let process = GetCurrentProcess();
+        let mut counters = PROCESS_MEMORY_COUNTERS {
+            cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            ..Default::default()
+        };
+        let _ = GetProcessMemoryInfo(process, &mut counters, counters.cb);
+        let mut handles = 0u32;
+        let _ = GetProcessHandleCount(process, &mut handles);
+        (counters.WorkingSetSize as f64 / 1048576.0, handles as u64)
+    }
+    #[cfg(not(windows))]
+    {
+        let pages: f64 = std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|s| s.split_whitespace().nth(1)?.parse().ok())
+            .unwrap_or(0.0);
+        let fds = std::fs::read_dir("/proc/self/fd").map_or(0, |d| d.count() as u64);
+        (pages * 4096.0 / 1048576.0, fds)
+    }
+}
+
+/// The plan's soak (Phase 3, step 6) without a player or a person: open a
+/// session, decode the whole TrueHD track with seeks in it (`reset` every 2000
+/// packets, as a flush on a seek does), drop the session, and again, for
+/// `HARLETTY_MF_SOAK_SECS` seconds. Memory and handles are sampled after each
+/// round; after the warm-up rounds they must stay flat. Off unless the variable
+/// is set (CI sets it).
+#[test]
+fn soak_neither_memory_nor_handles_grow() {
+    let seconds: u64 = std::env::var("HARLETTY_MF_SOAK_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if seconds == 0 {
+        eprintln!("skipped: HARLETTY_MF_SOAK_SECS is not set");
+        return;
+    }
+    let Some(file) = sample("ffvii.mkv") else {
+        return;
+    };
+    let packets = mkv_audio_packets(&file);
+    let started = std::time::Instant::now();
+    let mut series: Vec<(f64, u64)> = Vec::new();
+    let mut round = 0;
+    while started.elapsed().as_secs() < seconds {
+        let mut session =
+            Session::open(truehd(), 48_000, STEREO, &setup(&format!("soak{round}"))).unwrap();
+        for (i, p) in packets.iter().enumerate() {
+            if i % 2000 == 1999 {
+                session.reset();
+            }
+            session.push(&p.data, Some(p.pts_hns)).expect("push");
+        }
+        session.drain().expect("drain");
+        drop(session);
+        series.push(resources());
+        let (mib, handles) = series[series.len() - 1];
+        eprintln!(
+            "round {round} (+{}s): {mib:.1} MiB, {handles} handles",
+            started.elapsed().as_secs()
+        );
+        round += 1;
+    }
+    assert!(
+        series.len() >= 8,
+        "only {} rounds in {seconds} s",
+        series.len()
+    );
+    // The first rounds fill caches (tables, thread pools): the baseline is the
+    // highest of rounds 3-4; the rest must not rise above it by more than noise.
+    let baseline = &series[2..4];
+    let (base_mib, base_handles) = (
+        baseline.iter().map(|r| r.0).fold(0.0, f64::max),
+        baseline.iter().map(|r| r.1).max().unwrap(),
+    );
+    let rest = &series[4..];
+    let (top_mib, top_handles) = (
+        rest.iter().map(|r| r.0).fold(0.0, f64::max),
+        rest.iter().map(|r| r.1).max().unwrap(),
+    );
+    assert!(
+        top_mib <= base_mib + 30.0,
+        "memory grew: {base_mib:.1} -> {top_mib:.1} MiB"
+    );
+    assert!(
+        top_handles <= base_handles + 16,
+        "handles grew: {base_handles} -> {top_handles}"
+    );
+    // A leak per round shows as a trend too: the last quarter against the first.
+    let quarter = rest.len() / 4;
+    if quarter > 0 {
+        let mean = |r: &[(f64, u64)]| r.iter().map(|x| x.0).sum::<f64>() / r.len() as f64;
+        let (early, late) = (mean(&rest[..quarter]), mean(&rest[rest.len() - quarter..]));
+        assert!(
+            late <= early + 15.0,
+            "memory trends upward: {early:.1} -> {late:.1} MiB"
+        );
+    }
+}

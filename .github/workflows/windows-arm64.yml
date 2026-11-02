@@ -82,6 +82,9 @@ jobs:
           ls -l "$dir"
           echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
           echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
+          # The soak test (plan, Phase 3 step 6) with no player: repeated
+          # open/decode/seek/drop of the real track; memory and handles must stay flat.
+          echo "HARLETTY_MF_SOAK_SECS=120" >> "$GITHUB_ENV"
 
       - name: Build and test the Media Foundation decoder (release)
         shell: bash
@@ -167,6 +170,9 @@ jobs:
           ls -l "$dir"
           echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
           echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
+          # The soak test (plan, Phase 3 step 6) with no player: repeated
+          # open/decode/seek/drop of the real track; memory and handles must stay flat.
+          echo "HARLETTY_MF_SOAK_SECS=120" >> "$GITHUB_ENV"
 
       - name: Build and test the Media Foundation decoder (release)
         shell: bash
