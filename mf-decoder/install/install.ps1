@@ -85,13 +85,25 @@ Get-ChildItem $PSScriptRoot -File |
 if ($WithDolbyDigital) {
     $options = Join-Path $InstallDir 'mf.yaml'
     $list = 'codecs: [truehd, dts, eac3, ac3]'
-    $lines = @(Get-Content $options)
-    if ($lines -match '^codecs:') {
-        $lines = $lines -replace '^codecs:.*$', $list
-    } else {
-        $lines += '', $list
+    # Replace the whole value of `codecs:`: its first line, and the indented
+    # lines of a block list or a wrapped flow list under it.
+    $out = @()
+    $found = $false
+    $skipping = $false
+    foreach ($line in @(Get-Content $options)) {
+        if ($line -match '^codecs:') {
+            $out += $list
+            $found = $true
+            $skipping = $true
+        } elseif ($skipping -and $line -match '^\s+\S' -and $line -notmatch '^\s*#') {
+            continue
+        } else {
+            $skipping = $false
+            $out += $line
+        }
     }
-    Set-Content -Path $options -Value $lines -Encoding UTF8
+    if (-not $found) { $out += '', $list }
+    Set-Content -Path $options -Value $out -Encoding UTF8
     Write-Host 'E-AC-3 and AC-3 are switched on in mf.yaml.'
 }
 
@@ -99,15 +111,17 @@ if ($WithDolbyDigital) {
 Invoke-Regsvr32 $target
 
 if (-not (Test-MftListed)) {
-    throw 'The decoder is registered, but Media Foundation does not list it for TrueHD.'
+    throw 'The decoder is registered, but Media Foundation does not list it for any codec. Check codecs: in mf.yaml.'
 }
 
 Write-Host ''
 Write-Host "Installed: $target"
-Write-Host 'Media Foundation lists it as a TrueHD decoder.'
+Write-Host 'Media Foundation lists it as a decoder.'
 Write-Host "Options:   $(Join-Path $InstallDir 'mf.yaml') and mf-config.yaml (same folder)"
 Write-Host "Log:       $env:LOCALAPPDATA\harletty\mf\harletty-mf.log (per user)"
 Write-Host 'Programs that are already playing must be restarted to see the decoder.'
 Write-Host ''
 Write-Host 'To undo:'
-Write-Host "  & '$(Join-Path $InstallDir 'uninstall.ps1')'"
+$uninstall = "& '$(Join-Path $InstallDir 'uninstall.ps1')'"
+if ($InstallDir -ne $script:DefaultDir) { $uninstall += " -InstallDir '$InstallDir'" }
+Write-Host "  $uninstall"

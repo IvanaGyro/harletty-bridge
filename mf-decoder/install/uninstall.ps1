@@ -41,15 +41,33 @@ if (Test-MftListed) {
     throw 'The decoder is still listed by Media Foundation after unregistering.'
 }
 
+# Only what install.ps1 put there: the folder may hold other things.
 if (Test-Path $InstallDir) {
     try {
-        Remove-Item -Recurse -Force $InstallDir
+        $others = $script:OwnFiles | Where-Object { $_ -ne 'uninstall.ps1' }
+        foreach ($name in $others) {
+            Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $InstallDir $name)
+            if (Test-Path (Join-Path $InstallDir $name)) { throw "$name is still in use" }
+        }
+        $licences = Join-Path $InstallDir 'licences'
+        if (Test-Path $licences) {
+            Get-ChildItem $licences -File |
+                Where-Object { $_.Name -match '^(LICENSE|LICENSES|NOTICE)' } |
+                Remove-Item -Force
+            if (-not (Get-ChildItem $licences -Force)) { Remove-Item $licences }
+        }
+        Remove-Item -Force (Join-Path $InstallDir 'uninstall.ps1') -ErrorAction SilentlyContinue
     } catch {
-        throw "Unregistered, but could not delete $InstallDir. Close every program that plays media and delete it. ($_)"
+        throw "Unregistered, but could not delete everything in $InstallDir. Close every program that plays media and delete it. ($_)"
+    }
+    if (Get-ChildItem $InstallDir -Force) {
+        Write-Host "Left in place, because the installer did not put it there: $InstallDir"
+    } else {
+        Remove-Item $InstallDir
+        $parent = Split-Path $InstallDir
+        if ((Test-Path $parent) -and -not (Get-ChildItem $parent -Force)) { Remove-Item $parent }
     }
 }
-$parent = Split-Path $InstallDir
-if ((Test-Path $parent) -and -not (Get-ChildItem $parent -Force)) { Remove-Item $parent }
 
 if ($Purge) {
     $user = Join-Path $env:LOCALAPPDATA 'harletty\mf'

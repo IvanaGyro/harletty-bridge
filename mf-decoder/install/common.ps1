@@ -111,10 +111,23 @@ public static class HarlettyMft {
 '@
 }
 
-# TrueHD, as the decoder registers it.
-$script:TrueHdSubtype = [Guid]'EB27CEC4-163E-4CA3-8B74-8E25F91B517E'
+# Every subtype the decoder can register for (mf.yaml may switch some off).
+$script:Subtypes = @(
+    'EB27CEC4-163E-4CA3-8B74-8E25F91B517E'  # TrueHD
+    'A2E58EB7-0FA9-48BB-A40C-FA0E156D0645'  # DTS-HD
+    '00000008-0000-0010-8000-00AA00389B71'  # DTS
+    'A7FB87AF-2D02-42FB-A4D4-05CD93843BDD'  # E-AC-3
+    'E06D802C-DB46-11CF-B4D1-00805F6CBBEA'  # AC-3
+) | ForEach-Object { [Guid]$_ }
 
-# Whether Media Foundation lists this decoder for TrueHD.
+# Whether Media Foundation lists this decoder for any codec it registers.
 function Test-MftListed {
-    [HarlettyMft]::Decoders($script:TrueHdSubtype) -contains $script:Clsid
+    foreach ($subtype in $script:Subtypes) {
+        if ([HarlettyMft]::Decoders($subtype) -contains $script:Clsid) { return $true }
+    }
+    return $false
 }
+
+# The files install.ps1 puts in the install folder, and nothing else: the
+# folder may have been somebody's before.
+$script:OwnFiles = @('harletty_mf.dll', 'mf.yaml', 'mf-config.yaml', 'common.ps1', 'uninstall.ps1')
