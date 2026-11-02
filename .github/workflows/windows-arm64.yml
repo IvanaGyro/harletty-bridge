@@ -69,6 +69,20 @@ jobs:
 
       # Not a default member: built and tested on its own. The registration
       # test writes under HKLM, which the hosted runner may do.
+      # Real TrueHD for the decoder tests: downloaded here, never committed.
+      - name: Download the TrueHD samples
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/truehd"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/atmos.thd" \
+            https://fate-suite.ffmpeg.org/truehd/atmos.thd
+          curl -fsSL --retry 3 -o "$dir/ffvii.mkv" \
+            'https://samples.ffmpeg.org/A-codecs/TrueHD/TrueHD%20Sample%201%20%28Final%20Fantasy%20VII%20Advent%20Children%29.mkv'
+          ls -l "$dir"
+          echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
+          echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
+
       - name: Build and test the Media Foundation decoder (release)
         shell: bash
         env:
@@ -139,6 +153,20 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      # Real TrueHD for the decoder tests: downloaded here, never committed.
+      - name: Download the TrueHD samples
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/truehd"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/atmos.thd" \
+            https://fate-suite.ffmpeg.org/truehd/atmos.thd
+          curl -fsSL --retry 3 -o "$dir/ffvii.mkv" \
+            'https://samples.ffmpeg.org/A-codecs/TrueHD/TrueHD%20Sample%201%20%28Final%20Fantasy%20VII%20Advent%20Children%29.mkv'
+          ls -l "$dir"
+          echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
+          echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
 
       - name: Build and test the Media Foundation decoder (release)
         shell: bash
