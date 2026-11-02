@@ -215,6 +215,81 @@ jobs:
             harletty-bridge/target/release/harletty-bridge-*-windows-x86_64.zip
             harletty-bridge/target/release/harletty-cli-*-windows-x86_64.zip
 
+  # The Media Foundation decoder (docs/media-foundation.md): one DLL per
+  # architecture, with the Dolby and DTS decoders linked in, so it needs no
+  # bridge. Its archives are a second set beside the bridge archives; neither
+  # set needs the other.
+  build-mf:
+    needs: omniphony
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x86_64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      HARLETTY_OMNIPHONY_COMMIT: ${{ needs.omniphony.outputs.commit }}
+    steps:
+      - name: Checkout harletty-bridge
+        uses: actions/checkout@v5
+        with:
+          path: harletty-bridge
+
+      - name: Checkout Omniphony (path dependencies)
+        uses: actions/checkout@v5
+        with:
+          repository: mgth/Omniphony
+          ref: ${{ needs.omniphony.outputs.commit }}
+          path: Omniphony
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (release)
+        run: cargo build --release --locked -p harletty-mf-decoder
+        working-directory: harletty-bridge
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+crt-static
+
+      - name: Check the binary needs no Visual C++ runtime
+        shell: bash
+        run: |
+          if [ -f Omniphony/scripts/check_windows_crt_imports.py ]; then
+            python Omniphony/scripts/check_windows_crt_imports.py \
+              harletty-bridge/target/release/harletty_mf.dll
+          else
+            echo "check_windows_crt_imports.py not in this Omniphony commit: check skipped"
+          fi
+
+      - name: Stage the archive
+        shell: bash
+        run: scripts/stage-mf-package.sh target/release/harletty_mf.dll target/release/stage-mf
+        working-directory: harletty-bridge
+
+      # A manual run on a branch has a ref name with a slash in it.
+      - name: Package (zip)
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Replace('/', '-')
+          Compress-Archive -Path harletty-bridge/target/release/stage-mf/* -DestinationPath "harletty-bridge/target/release/harletty-mf-$version-windows-${{ matrix.arch }}.zip"
+
+      # The dry run's check that the archive installs and uninstalls cleanly.
+      - name: Install and uninstall from the archive
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem harletty-bridge/target/release/harletty-mf-*-windows-${{ matrix.arch }}.zip).FullName
+          ./harletty-bridge/scripts/test-mf-install.ps1 -Zip $zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: harletty-mf-windows-${{ matrix.arch }}
+          path: harletty-bridge/target/release/harletty-mf-*-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
   build-macos:
     runs-on: macos-14
     needs: omniphony
@@ -288,7 +363,7 @@ jobs:
             harletty-bridge/target/release/harletty-cli-*-macos-arm64.zip
 
   release:
-    needs: [omniphony, build-linux, build-windows, build-macos]
+    needs: [omniphony, build-linux, build-windows, build-macos, build-mf]
     # A manual run is a dry run: it stops after the builds, even when
     # dispatched on a tag (`gh workflow run release.yml --ref v…` gives it
     # `refs/tags/v…`), so only the tag push itself publishes.
@@ -311,6 +386,16 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: harletty-bridge-macos-arm64
+
+      - name: Download the Media Foundation decoder (x86_64)
+        uses: actions/download-artifact@v8
+        with:
+          name: harletty-mf-windows-x86_64
+
+      - name: Download the Media Foundation decoder (arm64)
+        uses: actions/download-artifact@v8
+        with:
+          name: harletty-mf-windows-arm64
 
       # The Omniphony requirement, from the pin, at the top of the notes. Only
       # for a release that does not exist yet: a re-run keeps the notes as
@@ -346,6 +431,13 @@ jobs:
             echo "The bridges are built against \`bridge_api\` ${BRIDGE_API}, from ${link} (\`.omniphony-ref\`: \`${REF}\`). A host loads them only when built against the same \`bridge_api\` minor, ${minor}.x: ${since}, up to the release that moves \`bridge_api\` past ${minor}. Other hosts refuse them. The CLI has no such dependency."
             echo
             echo "When a host loads one, it logs what it was built from: \`harletty-dolby-bridge <version> (bridge_api ${BRIDGE_API}, Omniphony ${COMMIT})\`, and likewise for the other two."
+            echo
+            echo "## Which archive"
+            echo
+            echo "- **Omniphony users** take \`harletty-bridge-*\`, the bridge plugins above."
+            echo "- **Windows Media Foundation players** (Windows Media Player Legacy, and apps that play through Media Foundation) take \`harletty-mf-*-windows-x86_64.zip\` or \`-windows-arm64.zip\`, the one for the processor of the PC. It is one DLL with the Dolby and DTS decoders and the Omniphony engine (${link}, \`.omniphony-ref\`: \`${REF}\`) built in, and an installer: it needs no bridge and no Omniphony. See docs/media-foundation.md."
+            echo
+            echo "Neither set needs the other."
           } > omniphony-requirement.md
           echo "path=omniphony-requirement.md" >> "$GITHUB_OUTPUT"
 
@@ -361,3 +453,5 @@ jobs:
             harletty-cli-*-linux-x86_64.zip
             harletty-cli-*-windows-x86_64.zip
             harletty-cli-*-macos-arm64.zip
+            harletty-mf-*-windows-x86_64.zip
+            harletty-mf-*-windows-arm64.zip

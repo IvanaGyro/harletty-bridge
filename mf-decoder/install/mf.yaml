@@ -1,0 +1,22 @@
+# harletty Media Foundation decoder: options.
+#
+# Read from the folder of harletty_mf.dll, then from
+# %LOCALAPPDATA%\harletty\mf\mf.yaml, which wins key by key. Change the
+# codecs, then run install.ps1 again (the list is registered at install time).
+# The other keys are read when a player loads the decoder.
+
+# The codecs to register. TrueHD and DTS (DTS, DTS-HD, DTS:X) by default.
+# E-AC-3 and AC-3 are off: Windows has its own decoder for them, and it may be
+# chosen first anyway. install.ps1 -WithDolbyDigital adds them here.
+# codecs: [truehd, dts]
+
+# Speaker mask of the output, when the default audio device reports the wrong
+# one (a number or 0x... text: 0x3F is 5.1, 0x63F is 7.1 in Windows' masks).
+# Stereo or mono gives headphone (binaural) rendering.
+# speaker_mask: 0x3F
+
+# off, error, warn, info, debug or trace.
+# log_level: info
+
+# Where to log. This is the default.
+# log_file: '%LOCALAPPDATA%\harletty\mf\harletty-mf.log'

@@ -1,0 +1,14 @@
+# harletty Media Foundation decoder: the rendering engine's configuration, in
+# Omniphony's config.yaml schema. Everything absent takes Omniphony's default.
+#
+# Read from %LOCALAPPDATA%\harletty\mf\mf-config.yaml, then from the folder of
+# harletty_mf.dll. It is the decoder's own file: Omniphony's shared config is
+# not read.
+render:
+  # The decoder has nothing to send OSC to.
+  osc: false
+  # Dynamic range control. Off is the default; Light and heavy/RF are others.
+  # drc_mode: Off
+  # The presentation (substream) to decode, when a stream carries several; the
+  # best one when absent.
+  # presentation: 3

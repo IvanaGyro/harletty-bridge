@@ -144,6 +144,16 @@ If a bridge isn't found, the host falls back to the normal
 (non-object) audio and the config save log / Studio status will say so
 — double-check that `bridge_paths` points at the files you downloaded.
 
+### 🎞️ Windows Media Foundation players
+
+For Windows programs that play through Media Foundation (the Windows
+`MediaPlayer`, 64-bit Windows Media Player Legacy), there is a separate
+download: `harletty-mf-*-windows-x86_64.zip` or `-windows-arm64.zip`. It is one
+DLL with an installer that makes those programs decode TrueHD, DTS, DTS-HD and
+DTS:X, with no bridge and no Omniphony needed. See
+[docs/media-foundation.md](docs/media-foundation.md) for what it is for, what
+it is not for, and how to install it.
+
 ### 🐧 Linux
 
 1. Download **`harletty-bridge-<version>-linux-x86_64.zip`** from the

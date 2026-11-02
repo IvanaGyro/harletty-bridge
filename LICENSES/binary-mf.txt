@@ -1,0 +1,32 @@
+harletty Media Foundation decoder — licence terms
+
+The library harletty_mf.dll is distributed under the terms of the GNU
+General Public License, version 3 or (at your option) any later version
+(LICENSE.GPL-3.0).
+
+What it is made of:
+
+- It links the Omniphony rendering engine and its companion crates
+  (https://github.com/mgth/Omniphony: orender_engine, renderer, bridge_api,
+  runtime_control, script_backend and others), which are GPL-3.0-or-later, so
+  the library is a combined work under the GPL.
+- The Dolby and DTS decoders of harletty-bridge are linked in (they are the
+  same code as the harletty_dolby_bridge and harletty_dts_bridge plugins).
+  Most of the harletty-bridge crates are Apache-2.0 (LICENSE.Apache-2.0).
+- The DTS decoder statically links the `dca` crate, which is LGPL-2.1-or-later
+  (LICENSE.LGPL-2.1) because it is based on FFmpeg's DCA decoder; its
+  copyright holders are listed in NOTICE.dca.
+- The engine's scripting support links `mlua` with a bundled Lua (MIT).
+- Windows API bindings come from the `windows` crates (MIT OR Apache-2.0).
+- Other third-party Rust crates are under permissive licences (MIT,
+  Apache-2.0, BSD, ISC, Zlib, Unlicense, 0BSD). The one exception is
+  `generational-arena` (MPL-2.0), used unmodified; its source is at
+  https://crates.io/crates/generational-arena.
+
+Apache-2.0, LGPL-2.1-or-later, MPL-2.0 and the permissive licences above may
+all be combined into a work under GPL-3.0. Linking this library into a
+proprietary program is not permitted.
+
+The complete corresponding source is the harletty-bridge repository at the
+tag of this release (https://github.com/harletty/harletty-bridge), together
+with the Omniphony commit named in its `.omniphony-ref` file.
