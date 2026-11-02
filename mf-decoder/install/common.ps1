@@ -51,6 +51,9 @@ function Invoke-Regsvr32([string]$Dll, [switch]$Unregister) {
     }
 }
 
+# Defined once per PowerShell process: install.ps1 -Uninstall runs uninstall.ps1
+# in the same process, and Add-Type refuses a type that already exists.
+if (-not ('HarlettyMft' -as [type])) {
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -106,6 +109,7 @@ public static class HarlettyMft {
     }
 }
 '@
+}
 
 # TrueHD, as the decoder registers it.
 $script:TrueHdSubtype = [Guid]'EB27CEC4-163E-4CA3-8B74-8E25F91B517E'

@@ -30,12 +30,11 @@ if (Test-Path $target) {
 } else {
     # The file is gone but the registration may not be: remove the keys.
     Write-Host "$target is not there; removing the registration only."
-    $hklm = 'HKLM:\SOFTWARE\Classes'
-    foreach ($key in "$hklm\CLSID\$($script:Clsid)", "$hklm\MediaFoundation\Transforms\$($script:Clsid)") {
+    $mf = 'HKLM:\SOFTWARE\Microsoft\Windows Media Foundation\Transforms'
+    foreach ($key in "HKLM:\SOFTWARE\Classes\CLSID\$($script:Clsid)", "$mf\$($script:Clsid)",
+            "$mf\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$($script:Clsid)") {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $key
     }
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
-        "$hklm\MediaFoundation\Transforms\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$($script:Clsid)"
 }
 
 if (Test-MftListed) {

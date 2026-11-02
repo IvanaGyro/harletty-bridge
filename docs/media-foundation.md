@@ -123,15 +123,9 @@ attach the log.
 
 ## Troubleshooting
 
-**The player does not use it.** Check that Media Foundation knows it. In an
-administrator PowerShell:
-
-```powershell
-Test-Path 'HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\{AC884ED4-9379-4E5A-BAF6-3365A4F08E38}'
-```
-
-must print `True`. Then check that the player really loaded it, while a TrueHD
-or DTS file is playing:
+**The player does not use it.** The installer already checked that Media
+Foundation lists the decoder. Check that the player really loaded it, while a
+TrueHD or DTS file is playing:
 
 ```powershell
 tasklist /m harletty_mf.dll

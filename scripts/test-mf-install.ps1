@@ -11,6 +11,9 @@ $work = Join-Path ([IO.Path]::GetTempPath()) "harletty-mf-install-$PID"
 Expand-Archive -Path $Zip -DestinationPath $work
 Write-Host "Archive holds: $((Get-ChildItem $work -Recurse -File | ForEach-Object { $_.Name }) -join ', ')"
 
+# Media Foundation's own answer, not a guess at where it keeps its registry keys.
+. (Join-Path $work 'common.ps1')
+
 function Check([bool]$ok, [string]$what) {
     if (-not $ok) { throw "FAILED: $what" }
     Write-Host "ok: $what"
@@ -24,13 +27,13 @@ foreach ($name in 'mf.yaml', 'mf-config.yaml', 'uninstall.ps1', 'common.ps1', 'l
 }
 Check ((Get-Content (Join-Path $installDir 'mf.yaml')) -contains 'codecs: [truehd, dts, eac3, ac3]') '-WithDolbyDigital wrote the codec list'
 Check (Test-Path "$classes\CLSID\$clsid\InprocServer32") 'the COM class is registered'
-Check (Test-Path "$classes\MediaFoundation\Transforms\$clsid") 'the MFT is registered'
+Check (Test-MftListed) 'Media Foundation lists the decoder'
 
 # A second run keeps the user's edits to the option files and still works.
 Add-Content (Join-Path $installDir 'mf.yaml') '# user edit'
 & (Join-Path $work 'install.ps1')
 Check ((Get-Content (Join-Path $installDir 'mf.yaml')) -contains '# user edit') 'installing again keeps the options file'
-Check (Test-Path "$classes\MediaFoundation\Transforms\$clsid") 'the MFT is registered after installing again'
+Check (Test-MftListed) 'Media Foundation lists the decoder after installing again'
 
 # Ask for the per-user folder too, so -Purge has something to delete.
 $user = Join-Path $env:LOCALAPPDATA 'harletty\mf'
@@ -39,14 +42,14 @@ Set-Content (Join-Path $user 'harletty-mf.log') 'x'
 & (Join-Path $installDir 'uninstall.ps1')
 Check (-not (Test-Path $installDir)) 'the install folder is gone'
 Check (-not (Test-Path "$classes\CLSID\$clsid")) 'the COM class is gone'
-Check (-not (Test-Path "$classes\MediaFoundation\Transforms\$clsid")) 'the MFT registration is gone'
+Check (-not (Test-MftListed)) 'Media Foundation no longer lists the decoder'
 Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is kept without -Purge'
 
 # Again, and the same through install.ps1 -Uninstall -Purge.
 & (Join-Path $work 'install.ps1')
 & (Join-Path $work 'install.ps1') -Uninstall -Purge
 Check (-not (Test-Path $installDir)) 'install.ps1 -Uninstall: the install folder is gone'
-Check (-not (Test-Path "$classes\MediaFoundation\Transforms\$clsid")) 'install.ps1 -Uninstall: the MFT registration is gone'
+Check (-not (Test-MftListed)) 'install.ps1 -Uninstall: Media Foundation no longer lists the decoder'
 Check (-not (Test-Path $user)) '-Purge deleted the per-user folder'
 
 Remove-Item -Recurse -Force $work
