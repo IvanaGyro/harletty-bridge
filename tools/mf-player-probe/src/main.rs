@@ -264,12 +264,26 @@ mod windows_main {
         }
     }
 
+    /// `file:///C:/dir/name` for a Windows path, with everything that is not
+    /// unreserved (or `/` or the drive's `:`) percent-escaped, so a `#` or `%`
+    /// or a space in a name stays part of the name.
+    fn file_uri(path: &str) -> String {
+        let mut uri = String::from("file:///");
+        for (i, byte) in path.replace('\\', "/").bytes().enumerate() {
+            match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                    uri.push(byte as char)
+                }
+                b':' if i == 1 => uri.push(':'),
+                _ => uri.push_str(&format!("%{byte:02X}")),
+            }
+        }
+        uri
+    }
+
     fn play(file: &str, soak: u64, seek_every: u64, report_every: u64) -> Result<()> {
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
-        let uri = Uri::CreateUri(&HSTRING::from(format!(
-            "file:///{}",
-            path.display().to_string().replace('\\', "/")
-        )))?;
+        let uri = Uri::CreateUri(&HSTRING::from(file_uri(&path.display().to_string())))?;
         let source = MediaSource::CreateFromUri(&uri)?;
         let player = MediaPlayer::new()?;
         let (tx, rx) = mpsc::channel::<String>();
@@ -317,7 +331,8 @@ mod windows_main {
                         rng = rng
                             .wrapping_mul(6364136223846793005)
                             .wrapping_add(1442695040888963407);
-                        let to = ((rng >> 33) as i64) % length;
+                        // The whole 64-bit value: a shifted one tops out near 215 s.
+                        let to = (rng % length as u64) as i64;
                         let _ = session.SetPosition(TimeSpan { Duration: to });
                         println!("  +{elapsed}s seek to {:.0}s", to as f64 / 1e7);
                     }
