@@ -74,7 +74,7 @@ jobs:
         env:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
-          cargo build --release --locked -p harletty-mf-decoder
+          cargo build --release --locked -p harletty-mf-decoder -p harletty-mf-player-probe
           cargo test --release --locked -p harletty-mf-decoder
         working-directory: harletty-bridge
 
@@ -103,11 +103,13 @@ jobs:
 
       # The decoder for Windows Media Player and other Media Foundation
       # players: a set of its own, no bridge DLL (plan D10).
-      - name: Upload the Media Foundation decoder
+      - name: Upload the Media Foundation decoder and the probe
         uses: actions/upload-artifact@v7
         with:
           name: harletty-mf-windows-arm64-${{ github.event.pull_request.head.sha || github.sha }}
-          path: harletty-bridge/target/release/harletty_mf.dll
+          path: |
+            harletty-bridge/target/release/harletty_mf.dll
+            harletty-bridge/target/release/mf-player-probe.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -143,16 +145,19 @@ jobs:
         env:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
-          cargo build --release --locked -p harletty-mf-decoder
+          cargo build --release --locked -p harletty-mf-decoder -p harletty-mf-player-probe
           cargo test --release --locked -p harletty-mf-decoder
         working-directory: harletty-bridge
 
-      # One file: the Dolby and DTS decoders are linked in (plan D10).
-      - name: Upload the decoder
+      # The decoder is one file: the Dolby and DTS decoders are linked in (plan
+      # D10). The probe plays a file through MediaPlayer, for the soak test and
+      # the check that no bridge DLL is loaded.
+      - name: Upload the decoder and the probe
         uses: actions/upload-artifact@v7
         with:
           name: harletty-mf-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             harletty-bridge/target/release/harletty_mf.dll
+            harletty-bridge/target/release/mf-player-probe.exe
           if-no-files-found: error
           retention-days: 30

@@ -184,7 +184,14 @@ impl Session {
         // A configuration of the user's own is theirs, but binaural output is
         // not the user's to switch off when the output is too small to pan to.
         let engine_config = match (&setup.engine_config, plan.binaural) {
-            (Some(path), true) => Some(write_binaural_over(path, &setup.work_dir)?),
+            (Some(path), true) => {
+                log::info!(
+                    "the output has two speakers or fewer: rendering binaurally, whatever \
+                     'render.binaural.output_mode' says in {}",
+                    path.display()
+                );
+                Some(write_binaural_over(path, &setup.work_dir)?)
+            }
             (Some(path), false) => Some(path.clone()),
             (None, true) => Some(write_binaural_config(&setup.work_dir)?),
             (None, false) => None,
