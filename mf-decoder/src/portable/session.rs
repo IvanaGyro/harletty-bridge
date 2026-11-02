@@ -90,6 +90,46 @@ fn write_binaural_config(dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The user's engine configuration with binaural output switched on, written
+/// to `dir`: the output is too small to pan to (`layout::plan`), so whatever
+/// else the user configured, the engine must binauralise or the session cannot
+/// open. A file that does not parse is left to the engine, which falls back to
+/// its defaults (and says so in the log): binaural alone.
+fn write_binaural_over(user: &Path, dir: &Path) -> Result<PathBuf, String> {
+    use serde_yaml_ng::{Mapping, Value};
+    let mut root = std::fs::read_to_string(user)
+        .ok()
+        .and_then(|text| serde_yaml_ng::from_str::<Value>(&text).ok())
+        .filter(Value::is_mapping)
+        .unwrap_or_else(|| Value::Mapping(Mapping::new()));
+    fn section(parent: &mut Value, key: &str) -> Value {
+        let map = parent.as_mapping_mut().expect("a mapping");
+        map.remove(key)
+            .filter(Value::is_mapping)
+            .unwrap_or_else(|| Value::Mapping(Mapping::new()))
+    }
+    let mut render = section(&mut root, "render");
+    let mut binaural = section(&mut render, "binaural");
+    binaural
+        .as_mapping_mut()
+        .expect("a mapping")
+        .insert("output_mode".into(), "binaural".into());
+    render
+        .as_mapping_mut()
+        .expect("a mapping")
+        .insert("binaural".into(), binaural);
+    root.as_mapping_mut()
+        .expect("a mapping")
+        .insert("render".into(), render);
+    let yaml = serde_yaml_ng::to_string(&root).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join("engine-binaural-user.yaml");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(yaml.as_str()) {
+        std::fs::write(&path, yaml).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
+
 impl Session {
     /// Start a decoder for `codec` at `rate`, rendering to `mask`'s speakers.
     /// Slow (the engine builds its panning tables): done when the input type is
@@ -124,7 +164,7 @@ impl Session {
             Engine::from_paths(
                 config,
                 Some(layout),
-                &[bridge.clone()],
+                std::slice::from_ref(&bridge),
                 Some(codec.input_codec),
                 rate,
             )
@@ -141,10 +181,11 @@ impl Session {
     ) -> Result<Self, String> {
         let plan = layout::plan(mask);
         let layout_path = write_layout(&setup.work_dir, plan.render_mask)?;
-        // A configuration of the user's own is theirs; otherwise the one that
-        // binauralises, when the output is too small to pan to.
+        // A configuration of the user's own is theirs, but binaural output is
+        // not the user's to switch off when the output is too small to pan to.
         let engine_config = match (&setup.engine_config, plan.binaural) {
-            (Some(path), _) => Some(path.clone()),
+            (Some(path), true) => Some(write_binaural_over(path, &setup.work_dir)?),
+            (Some(path), false) => Some(path.clone()),
             (None, true) => Some(write_binaural_config(&setup.work_dir)?),
             (None, false) => None,
         };

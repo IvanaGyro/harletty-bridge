@@ -241,3 +241,77 @@ fn corrupted_and_truncated_streams_never_panic_or_hang() {
         survives(option, vec![0xFF; 64 * 1024], &format!("{option}-ones"));
     }
 }
+
+/// A session whose engine is configured by `yaml` (Omniphony's `config.yaml`
+/// schema), the way a user's `mf-config.yaml` configures it.
+fn configured(option: &str, mask: u32, yaml: &str, tag: &str) -> Session {
+    let mut setup = setup(tag);
+    std::fs::create_dir_all(&setup.work_dir).unwrap();
+    let path = setup.work_dir.join("mf-config.yaml");
+    std::fs::write(&path, yaml).unwrap();
+    setup.engine_config = Some(path);
+    Session::open(codec(option), 48_000, mask, &setup).unwrap_or_else(|e| panic!("open: {e}"))
+}
+
+fn render(session: &mut Session, stream: &[u8]) -> Vec<Block> {
+    decode(session, stream, 4 * 1024)
+}
+
+#[test]
+fn the_engine_takes_drc_from_the_config() {
+    let plain = render(
+        &mut Session::open(codec("eac3"), 48_000, STEREO, &setup("drc-plain")).unwrap(),
+        EAC3,
+    );
+    let off = render(
+        &mut configured("eac3", STEREO, "render:\n  drc_mode: Off\n", "drc-off"),
+        EAC3,
+    );
+    let heavy = render(
+        &mut configured(
+            "eac3",
+            STEREO,
+            "render:\n  drc_mode: heavy/RF\n",
+            "drc-heavy",
+        ),
+        EAC3,
+    );
+    // Off is the default; heavy compression changes the signal.
+    assert_eq!(plain, off, "drc_mode: Off is not the default");
+    assert_eq!(frames(&heavy), frames(&off));
+    assert_ne!(heavy, off, "drc_mode: heavy/RF changed nothing");
+}
+
+#[test]
+fn the_engine_takes_the_presentation_from_the_config() {
+    // A substream the stream does not have must not stop playback: the bridge
+    // keeps its default (the engine warns), and the audio is the default's.
+    let plain = render(
+        &mut Session::open(codec("eac3"), 48_000, STEREO, &setup("pres-plain")).unwrap(),
+        EAC3,
+    );
+    let asked = render(
+        &mut configured("eac3", STEREO, "render:\n  presentation: 3\n", "pres-3"),
+        EAC3,
+    );
+    assert!(!asked.is_empty());
+    assert_eq!(frames(&plain), frames(&asked));
+}
+
+#[test]
+fn a_config_that_does_not_parse_means_the_defaults_not_a_failure() {
+    let plain = render(
+        &mut Session::open(codec("dts"), 48_000, STEREO, &setup("cfg-plain")).unwrap(),
+        DTS,
+    );
+    let broken = render(
+        &mut configured(
+            "dts",
+            STEREO,
+            "render: [this is: not\n  a mapping",
+            "cfg-broken",
+        ),
+        DTS,
+    );
+    assert_eq!(plain, broken);
+}
