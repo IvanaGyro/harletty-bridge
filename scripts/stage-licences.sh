@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Copy the licence texts and notices a release archive must carry into DEST,
 # under the names the archives list.
-#   scripts/stage-licences.sh cli|bridge DEST
+#   scripts/stage-licences.sh cli|bridge|mf DEST
 # `cli`: the CLI binary is conveyed under LGPL-3.0 (LICENSES/binary-cli.txt),
 # so it ships the LGPL-3.0 and GPL-3.0 texts besides the Apache-2.0 and
 # LGPL-2.1 texts of its sources. `bridge`: the bridges are GPL-3.0-or-later
 # (LICENSES/binary-bridge.txt); they add libopus's BSD notice, which the IAMF
-# bridge links in on Windows and macOS.
+# bridge links in on Windows and macOS. `mf`: the Media Foundation decoder is
+# one GPL-3.0-or-later DLL with the Dolby and DTS decoders and Omniphony's
+# engine linked in (LICENSES/binary-mf.txt); it has no libopus.
 set -euo pipefail
-kind="${1:?usage: stage-licences.sh cli|bridge DEST}"
-dest="${2:?usage: stage-licences.sh cli|bridge DEST}"
+kind="${1:?usage: stage-licences.sh cli|bridge|mf DEST}"
+dest="${2:?usage: stage-licences.sh cli|bridge|mf DEST}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 
 cp "$repo/LICENSE" "$dest/LICENSE.Apache-2.0"
@@ -24,6 +26,9 @@ case "$kind" in
   bridge)
     cp "$repo/LICENSES/binary-bridge.txt" "$dest/LICENSES.txt"
     cp "$repo/LICENSES/Opus.txt" "$dest/LICENSE.Opus"
+    ;;
+  mf)
+    cp "$repo/LICENSES/binary-mf.txt" "$dest/LICENSES.txt"
     ;;
   *)
     echo "unknown kind: $kind" >&2

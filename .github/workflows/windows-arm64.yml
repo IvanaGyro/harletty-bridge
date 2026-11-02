@@ -20,7 +20,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The two TrueHD samples, fetched once for both Windows jobs (with retries,
+  # and cached so that an outage of the sample hosts does not fail a run that
+  # had them before).
+  samples:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout harletty-bridge
+        uses: actions/checkout@v5
+
+      - name: Restore the cached samples
+        uses: actions/cache@v5
+        with:
+          path: truehd-samples
+          key: truehd-samples-v1
+
+      - name: Fetch the samples
+        run: scripts/fetch-truehd-samples.sh truehd-samples
+
+      - name: Upload the samples
+        uses: actions/upload-artifact@v7
+        with:
+          name: truehd-samples
+          path: truehd-samples
+          if-no-files-found: error
+          retention-days: 1
+
   windows-arm64:
+    needs: samples
     runs-on: windows-11-arm
     env:
       RUSTFLAGS: -D warnings -C target-feature=+crt-static
@@ -69,16 +96,18 @@ jobs:
 
       # Not a default member: built and tested on its own. The registration
       # test writes under HKLM, which the hosted runner may do.
-      # Real TrueHD for the decoder tests: downloaded here, never committed.
-      - name: Download the TrueHD samples
+      # Real TrueHD for the decoder tests: fetched once by the `samples` job,
+      # never committed.
+      - name: Get the TrueHD samples
+        uses: actions/download-artifact@v8
+        with:
+          name: truehd-samples
+          path: ${{ runner.temp }}/truehd
+
+      - name: Point the tests at the TrueHD samples
         shell: bash
         run: |
           dir="$RUNNER_TEMP/truehd"
-          mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$dir/atmos.thd" \
-            https://fate-suite.ffmpeg.org/truehd/atmos.thd
-          curl -fsSL --retry 3 -o "$dir/ffvii.mkv" \
-            'https://samples.ffmpeg.org/A-codecs/TrueHD/TrueHD%20Sample%201%20%28Final%20Fantasy%20VII%20Advent%20Children%29.mkv'
           ls -l "$dir"
           echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
           echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
@@ -104,6 +133,21 @@ jobs:
           test -f target/release/harletty_mf.dll
         working-directory: harletty-bridge
 
+      # The archive the release builds, installed and removed again on the
+      # runner (administrator, no other copy of the decoder registered).
+      - name: Stage the decoder archive
+        shell: bash
+        run: |
+          scripts/stage-mf-package.sh target/release/harletty_mf.dll stage
+        working-directory: harletty-bridge
+
+      - name: Install and uninstall from the archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path stage/* -DestinationPath harletty-mf-ci-windows-arm64.zip
+          ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-arm64.zip
+        working-directory: harletty-bridge
+
       # For testing on a Windows ARM64 machine: download from the run's page.
       # Named by commit, so artifacts from different pushes do not collide.
       - name: Upload artifacts
@@ -127,12 +171,14 @@ jobs:
           path: |
             harletty-bridge/target/release/harletty_mf.dll
             harletty-bridge/target/release/mf-player-probe.exe
+            harletty-bridge/harletty-mf-ci-windows-arm64.zip
           if-no-files-found: error
           retention-days: 30
 
   # The same decoder on x64, where most Windows machines are. Only the
   # Media Foundation decoder: the rest is built by the ARM64 job and ci.yml.
   mf-decoder-x64:
+    needs: samples
     runs-on: windows-latest
     env:
       RUSTFLAGS: -D warnings -C target-feature=+crt-static
@@ -157,16 +203,18 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # Real TrueHD for the decoder tests: downloaded here, never committed.
-      - name: Download the TrueHD samples
+      # Real TrueHD for the decoder tests: fetched once by the `samples` job,
+      # never committed.
+      - name: Get the TrueHD samples
+        uses: actions/download-artifact@v8
+        with:
+          name: truehd-samples
+          path: ${{ runner.temp }}/truehd
+
+      - name: Point the tests at the TrueHD samples
         shell: bash
         run: |
           dir="$RUNNER_TEMP/truehd"
-          mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$dir/atmos.thd" \
-            https://fate-suite.ffmpeg.org/truehd/atmos.thd
-          curl -fsSL --retry 3 -o "$dir/ffvii.mkv" \
-            'https://samples.ffmpeg.org/A-codecs/TrueHD/TrueHD%20Sample%201%20%28Final%20Fantasy%20VII%20Advent%20Children%29.mkv'
           ls -l "$dir"
           echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
           echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
@@ -183,6 +231,21 @@ jobs:
           cargo test --release --locked -p harletty-mf-decoder -- --nocapture
         working-directory: harletty-bridge
 
+      # The archive the release builds, installed and removed again on the
+      # runner (administrator, no other copy of the decoder registered).
+      - name: Stage the decoder archive
+        shell: bash
+        run: |
+          scripts/stage-mf-package.sh target/release/harletty_mf.dll stage
+        working-directory: harletty-bridge
+
+      - name: Install and uninstall from the archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path stage/* -DestinationPath harletty-mf-ci-windows-x64.zip
+          ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-x64.zip
+        working-directory: harletty-bridge
+
       # The decoder is one file: the Dolby and DTS decoders are linked in (plan
       # D10). The probe plays a file through MediaPlayer, for the soak test and
       # the check that no bridge DLL is loaded.
@@ -193,5 +256,6 @@ jobs:
           path: |
             harletty-bridge/target/release/harletty_mf.dll
             harletty-bridge/target/release/mf-player-probe.exe
+            harletty-bridge/harletty-mf-ci-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
