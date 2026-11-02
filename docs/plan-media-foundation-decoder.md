@@ -37,6 +37,57 @@ pinned Omniphony checkout.
   owner as co-author with a `Co-Authored-By:` trailer, as the existing commits
   on `dev/wmp` do. Never write a session link or a chat transcript link into
   a commit, a pull request, an issue, or a file.
+- **Release scope (a rule, for every phase).** This fork's final release
+  contains everything the upstream repository (`harletty/harletty-bridge`)
+  releases today, plus the MFT archives:
+  - the bridge archives (`harletty-bridge-<version>-<os>-<arch>.zip`, the
+    Omniphony plugins) and the CLI archives
+    (`harletty-cli-<version>-<os>-<arch>.zip`), each **as upstream produces
+    it**;
+  - the MFT archives (`harletty-mf-<version>-windows-<arch>.zip`), a separate
+    set (D10).
+
+  Nothing in this plan may change what the bridge and CLI jobs of
+  `release.yml` build or package, or what their binaries output.
+  - **The MFT build compiles only what it uses.** What goes into which build
+    is split with **Cargo features**, at compile time, never with a run-time
+    configuration key.
+    - The upstream builds keep their current feature sets. Each feature that
+      a shared crate (`bridge-common`, the `bridge-family-*` crates, `dca`,
+      `harletty`) gains is in its `default` set.
+    - So `plugin-*`, `bridge` and `harletty` compile exactly the code they
+      compile today.
+    - The MFT depends on those crates with `default-features = false` and
+      names only the features it needs (D11, "Build contents"). Nothing ships
+      dormant in it.
+  - **Features add code and never change behaviour.** No feature makes a
+    crate behave differently from what it does without it; it only adds a
+    path. The reason is Cargo's feature unification:
+    - the features of one package are the union over everything built in the
+      same invocation;
+    - so a feature that *changed* behaviour, a "bed only" switch for
+      example, would leak from the MFT into a plugin built alongside it.
+    - With additive features, unification can only add code to the MFT, in
+      builds that do not ship.
+    - `release.yml` builds the MFT in its own `cargo build -p
+      harletty-mf-decoder`, apart from the bridges and the CLI, and must keep
+      doing so.
+    - A capability only the MFT needs, the DTS lossless bed with no DTS:X
+      unfolding for example, is therefore what the crate does when the MFT
+      leaves the feature for the extra path off.
+  - **The check:** the pull request that adds such a feature shows the bridge
+    and CLI output unchanged:
+    - the existing tests pass unmodified, with no expected value, hash or
+      golden file edited: `bridge/tests/family_bridges.rs`,
+      `harletty/tests/golden.rs` and the family crates' own unit tests;
+    - a `tools/host-baseline` run over the local corpus, bridge DLLs built
+      before against after the change, is bit for bit equal. Its result goes
+      in the pull request description;
+    - `cargo tree -e features` for the bridge and CLI packages, before and
+      after, lists the same crates. Every new feature is shown enabled,
+      through `default`;
+    - `scripts/check-crate-isolation.sh` asserts what the MFT leaves out
+      (D11).
 
 ## Goal
 
@@ -54,6 +105,13 @@ unchanged. Rendering objects to speakers is Omniphony's: `orender_engine`, the
 engine behind `liborender` that mpv-omniphony uses. The MFT only adapts
 Media Foundation's sample flow to that engine. It is the Media Foundation
 counterpart of mpv's `ad_orender`.
+
+That is the design Phases 1–4 built. **D11 proposes a direction away from
+it:** an MFT that renders as little as possible.
+- It plays each stream's own channel presentation and leaves headphone
+  virtualisation to Windows, without `orender_engine`.
+- It is a direction, not a decision. Phase 6 measures four things on Windows
+  first, and its gate says which results keep the engine.
 
 Whether Windows' built-in WinRT player can load the same DLL is an open
 question, and Phase 0 answers it (step 4) before anything is built on it. That
@@ -83,6 +141,10 @@ of the Media Player app. If it can, FluentFin becomes a target alongside WMP.
 - **Any change** to `bridge_api`, to the three bridge plugins' behaviour, to
   the offline CLI, or to Omniphony. Phases 0–4 need none. Phase 5 lists the
   optional upstream additions that would help.
+  - The one exception is Phase 6's Cargo features in `bridge-common`, the two
+    families and `dca` (D11). They are in each crate's `default` set, so the
+    plugins and the CLI compile and behave as they do, under the
+    release-scope rule above.
 
 ## What is already known
 
@@ -138,14 +200,40 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   "Dolby Digital Plus Decoder MFT" (listed there as well).
 - **F6. Media Foundation float PCM cannot carry objects.** A decoder's PCM
   output (`MFAudioFormat_Float` with `WAVEFORMATEXTENSIBLE` and a channel
-  mask) has fixed speaker channels only. Objects must therefore be rendered
-  inside the MFT, which is what `orender_engine` does. The spatial-objects
-  output type (`MFAudioFormat_Float_SpatialObjects`, with
-  `MF_MT_SPATIAL_AUDIO_OBJECT_METADATA_FORMAT_ID`) exists. Its metadata
-  format, however, is one the downstream spatial renderer must recognise, and
-  it is barely documented
-  (<https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-spatial-audio-object-metadata-format-id>).
-  It is Phase 5 research, not the base design.
+  mask) has fixed speaker channels only.
+  - The objects must therefore become speaker channels inside the MFT. Today
+    `orender_engine` renders them.
+  - The other way is to play a channel presentation the stream already
+    carries (F14, D11).
+  - The spatial-objects output type (`MFAudioFormat_Float_SpatialObjects`,
+    with `MF_MT_SPATIAL_AUDIO_OBJECT_METADATA_FORMAT_ID`) exists. Its metadata
+    format, however, is one the downstream spatial renderer must recognise,
+    and it is barely documented
+    (<https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-spatial-audio-object-metadata-format-id>).
+    It is Phase 5 research, not the base design.
+  - **What the documentation says, checked against D11.**
+    - The metadata GUID is "decoder-defined" and the blob is "opaque to the
+      Media Foundation pipeline".
+    - A metadata stream's format id is "the identifier of the metadata
+      format for the currently active spatial rendering engine"
+      (<https://learn.microsoft.com/en-us/windows/win32/api/spatialaudiometadata/ns-spatialaudiometadata-spatialaudioobjectrenderstreamformetadataactivationparams>).
+    - No public format id or command set is documented.
+    - Microsoft's own Dolby decoder documents float, PCM and IEC 61937
+      outputs only
+      (<https://learn.microsoft.com/en-us/windows/win32/medfound/dolby-audio-decoder>).
+    - So no documented route exists for a third-party MFT to hand objects to
+      Windows. Removing the engine cannot rest on one.
+  - **A height bed has no documented PCM route either.** A 7.1.4 mask can be
+    *described* with the `SPEAKER_TOP_*` bits (`portable/layout.rs` does), but:
+    - nothing documented says the SAR, which takes "PCM or IEEE
+      floating-point"
+      (<https://learn.microsoft.com/en-us/windows/win32/medfound/streaming-audio-renderer>),
+      plays such a type as heights;
+    - Windows' spatial renderers take a channel bed up to 8.1.4.4 only as
+      static objects of `ISpatialAudioClient`
+      (<https://learn.microsoft.com/en-us/windows/win32/coreaudio/spatial-sound>),
+      and a decoder MFT owns none.
+    - *Verify* in Phase 6, gate measurement 2.
 - **F7. `orender_engine` can be embedded as a Rust crate.** The `orender` CLI
   embeds it this way; `liborender` (`orender_ffi`) is a thin C shim over it.
   The entry points are in
@@ -243,6 +331,73 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     server stops transcoding DTS for FluentFin.
   - Streams the server repackages as HLS carry no TrueHD (not in its HLS
     codec lists): only direct play of the MKV reaches the decoder.
+- **F14. What the decoders emit, without the engine.** Measured on Linux by
+  driving `PluginBridge` directly, at the `.omniphony-ref` pin.
+  - **TrueHD Atmos** (FFmpeg FATE `truehd/atmos.thd`):
+    - presentations 0, 1 and 2 are 2, 6 and 8 fixed channels (`L R`, then
+      `L R C LFE Ls Rs`, then that plus `Lb Rb`);
+    - presentation 3, the `best` default, is `LFE` plus 11 `Object`
+      channels, which hold 99.7 % of the energy.
+  - **The other Atmos samples:**
+    - `fba_atmos_obj.mlp` (in the `truehd` fork's test assets) is `LFE` plus
+      15 objects;
+    - `fba_atmos_cbi.mlp` is a channel-based 9.1.6 with no objects (`… Tfl
+      Tfr Tsl Tsr Tbl Tbr Lw Rw`).
+  - **TrueHD 5.1** (`ffvii`): presentations 2 and 3 fall back to the 6-channel
+    one (`truehd` `PresentationMap::effective_presentations`).
+  - **E-AC-3 JOC** (`joc_atmos_1s.eac3`): `LFE` plus 15 objects, with 100 % of
+    the energy in the objects.
+  - **DTS:X** (read in `bridge-family-dts/src/dts_pipeline.rs`, no sample at
+    hand):
+    - each height feed and object is subtracted from the 7.1 bed at its
+      stated fold, then emitted on its own channel;
+    - Auro-3D carriers are always unfolded to height labels;
+    - the family has no switch to return the bed with them still in.
+  - **So dropping objects is not an option.** On Atmos it leaves the LFE. On
+    DTS:X it leaves a bed with its heights and objects taken out.
+  - **TrueHD's `presentation` key** (already a Dolby-family key) selects the
+    encoder's own lossless 2.0, 5.1 or 7.1 rendering of the mix.
+- **F15. What the engine adds for the MFT, and what it costs.** Measured on
+  Linux x86-64 at the pin. Windows is not measured.
+  - **On a bed whose labels the layout has, it is an identity.** TrueHD 5.1
+    rendered to 7.1 is bit-identical to the bridge's output after a fade-in
+    of the first 4800 frames.
+  - **What it really does:**
+    - object panning (VBAP);
+    - virtual placement of labels the layout lacks;
+    - the HRTF binaural stage (`renderer/src/binaural`: SAF KEMAR HRIRs, ITD,
+      reflections, reverb). The MFT forces it for every output of two
+      speakers or fewer (`portable/layout.rs`, `plan`).
+  - **What it does not do by default:** DRC (the engine applies the bridge's
+    `drc_gain` ramp) and dialnorm are off by default (`drc_mode: Off`,
+    `use_loudness: false`).
+  - **Start-up:** `Session::open` takes 15–36 ms at stereo, 5.1, 7.1 and
+    7.1.4.
+  - **CPU:** rendering adds about 0.8 % of a core for 7.1 and about 1.5 % for
+    binaural.
+  - **Size:** a cdylib of the two families is 3.2 MB (thin LTO, stripped);
+    with the engine it is 10.0 MB, and 61 more crates (`mlua` with Lua,
+    `rosc`, `socket2`, `rayon`, `realfft`, `regex`, …).
+  - **Threads:** a process-wide rayon pool of N−1 threads
+    (`renderer/src/background_pool.rs`) and a layout-follower thread per
+    renderer, both inside the player.
+  - **Quality** on `atmos.thd`, rendered to 7.1:
+    - the engine and a 225-line dual-balance Cartesian panner gave nearly
+      the same output;
+    - each was as close to Dolby's own 7.1 presentation as the other.
+    - The clip lasts 0.11 s, so this suggests and does not show.
+- **F16. Windows' headphone virtualisation of a channel bed is reported, not
+  documented.**
+  - Third-party guides and bug reports (for example
+    <https://github.com/music-assistant/desktop-app/issues/146>) say choosing
+    Windows Sonic for Headphones turns on "7.1 virtual surround". Shared-mode
+    apps are then given a 7.1 mix format, which Windows virtualises.
+  - Microsoft's Spatial Sound page documents only the `ISpatialAudioClient`
+    route (F6).
+  - If the report holds, the MFT, which reads the mix format
+    (`com/endpoint.rs`), already gets 7.1 there. The engine's binaural stage
+    then never runs.
+  - *Verify*: Phase 6, gate measurement 1.
 
 ## Design decisions
 
@@ -269,6 +424,11 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   second ABI handshake. Never call `Engine::enable_osc`. Never call
   `orender_engine::init_live_logging`, which installs the engine's OSC
   logger.
+  - **Under review (D11).** On beds the engine is an identity (F15).
+    Elsewhere its work is object panning and binaural. D11 proposes playing
+    the streams' own presentations instead.
+  - D2 stands until Phase 6's gate decides. If the gate keeps the engine, D2
+    stays as written.
 - **D3. Until Phase 3, the decoders are the bridge DLLs, loaded from the
   MFT's own folder.** This is a stage on the way to D10, not what ships:
   Phases 1 and 2 are built and tested this way, and Phase 3 step 1 links the
@@ -293,6 +453,9 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   - Generating it, rather than shipping presets, keeps the labels and the
     mask identical. A preset's back-versus-side naming could otherwise
     disagree with a 5.1-side endpoint.
+  - Under D11 the YAML goes: there is no engine to read it. The mask and its
+    labels, in the same bit order, become the routing table the decoder
+    mixes into.
 - **D5. A config of its own, in two places.** The defaults are
   `mf-config.yaml`, next to the DLL, written by the installer. A per-user
   override is `%LOCALAPPDATA%\harletty\mf\config.yaml`, if present, and wins.
@@ -307,10 +470,21 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     (`render.binaural.output_mode: binaural`,
     `../Omniphony/omniphony-renderer/BINAURAL.md`) and works with a stereo
     mask.
+  - **Under D11:**
+    - `mf-config.yaml` and its Omniphony schema go, and with them the F9
+      caution.
+    - The options the MFT keeps move into `mf.yaml`: `drc` (the bridge's
+      DRC mode) and optionally `presentation`.
+    - Binaural leaves the MFT. Headphones get Windows' virtualisation (F16)
+      or, without it, a stereo presentation or downmix.
 - **D6. Codecs registered:** TrueHD and DTS by default. E-AC-3 and AC-3 only
   when the installer is asked (`-WithDolbyDigital`), and only once Phase 0 has
   shown what WMP does when Microsoft's decoder is also registered (F5).
   Without objects, Microsoft's decoder already plays them.
+  - **Under D11** the MFT would not render JOC objects, so it would add
+    nothing over Microsoft's decoder for E-AC-3 and AC-3. Their rows, the
+    installer's `-WithDolbyDigital` switch and the E-AC-3 decoder all leave
+    the MFT build (D11, "Build contents").
 - **D7. Split: a portable core and a thin COM shell.**
   - `portable` holds no COM (not named `core`, which would shadow the `core` crate), and every platform builds and tests it. It covers
     the subtype→codec table, mask→layout generation, sample-time arithmetic,
@@ -382,6 +556,129 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
       and Windows.
     - **Sharing saves nothing that matters.** The duplicated decoder code is
       a few MB on disk and one more link step in CI.
+  - **Under D11** the MFT keeps only the `bridge_api` types, through the
+    families.
+    - It calls `bridge_common::plugin::new_bridge::<P>` and reads
+      `RDecodedFrame`s itself.
+    - `Engine`, `BridgeLibs`, the engine assembly copied from `from_paths`
+      (`portable/assemble.rs`) and the test that compares it with
+      `from_paths` all go, and the drift that test guarded against goes with
+      them.
+    - The two release sets stay as they are.
+    - **The licence does not change:** `bridge-common` and the families are
+      GPL-3.0-or-later and link `bridge_api` (GPL-3.0-or-later). The DLL
+      stays GPL, and `.omniphony-ref` still pins `bridge_api`.
+    - A non-GPL MFT would have to drop the families as well and drive the
+      decoder crates directly, as the Apache-2.0 CLI does. That is not
+      planned.
+- **D11. Direction: decode the stream's own presentation, render (almost)
+  nothing, leave headphones to Windows.** *Proposed, gated by Phase 6; not
+  decided.*
+  - **Why:**
+    - On the speaker layouts Windows gives a PCM endpoint (≤ 7.1 in
+      practice, *inferred*; F6), every Atmos object ends up folded into
+      ≤ 7.1.
+    - TrueHD already carries the encoder's own lossless fold
+      (presentations 0–2, F14).
+    - On beds the engine is an identity (F15).
+    - What the engine costs inside every Media Foundation process (size,
+      crates, threads, a large pin to track) then buys object panning that
+      the stream already carries rendered, plus the binaural stage.
+  - **Per codec, with the output mask from D4:**
+    - **TrueHD:** `presentation` = 0 for one or two speakers, 1 for 3–6, 2
+      for more. The `truehd` fallback picks a smaller presentation the
+      stream has (F14; a 5.1-core Atmos stream is in gate measurement 4).
+      No objects are decoded.
+    - **DTS, DTS-HD, DTS:X, Auro-3D over DTS-HD:** the family built without
+      its DTS:X and Auro features ("Build contents") gives the lossless
+      backward-compatible bed. The encoder folded the heights and objects
+      into it.
+    - **E-AC-3, AC-3:** not registered, and not built in (D6).
+  - **Routing:** each frame label goes to its mask bit (`portable/layout.rs`
+    keeps that table). Two kinds of label do not map:
+    - `Ls/Rs` on a 5.1 mask with back bits go to the back speakers;
+    - a label with no bit (`Lw/Rw`, `Lsd/Rsd`, `Cb`, `Lsc/Rsc` on smaller
+      masks, heights on masks without them) is panned from its nominal
+      position across its nearest speakers, power preserving.
+
+    That is a fixed table worked out once per label set, not a renderer.
+    Stereo and mono masks are given stereo, not binaural.
+  - **What stays from the engine path, ported to the session:**
+    - DRC: the bridge's `drc_gain` and ramp, applied as
+      `orender_engine::render::fill_pcm_f32_drc` does, about 30 lines. It is
+      off unless `mf.yaml` sets `drc`.
+    - Timestamps: the first block of a push carries that push's time. The
+      latency is 0. `Block`, `OutputClock` and the transform do not change.
+  - **What is lost:**
+    - HRTF binaural inside the MFT. If F16 holds, Windows' virtualisation
+      takes its place. If it does not, headphones get a plain stereo
+      presentation.
+    - Height speakers get nothing. Gate measurement 2 says whether they
+      could at all.
+    - Object panning, which only matters if a layout bigger than the
+      stream's channel presentation can reach the speakers.
+    - Engine parity with mpv-omniphony.
+  - **Not chosen:**
+    - *Objects dropped, bed kept:* it plays the LFE alone (F14).
+    - *Objects to Windows* (`MFAudioFormat_Float_SpatialObjects`): no
+      documented route (F6). That stays Phase 5 research.
+    - *An object renderer of our own:* a dual-balance Cartesian panner of a
+      few hundred lines came out about as close to Dolby's fold as the engine
+      on one short clip (F15). It is the fallback only if the gate shows
+      height speakers reachable, or a DTS:X fold the bed cannot give. It
+      would be its own Cargo feature of the MFT, off unless that holds.
+  - **Build contents** (Phase 6 settles the exact feature names). The MFT
+    depends on the shared crates with `default-features = false` and enables:
+    - in `bridge-common`, no feature;
+    - in `bridge-family-dolby`, `truehd`;
+    - in `bridge-family-dts` and `dca`, nothing.
+
+    The shared crates gain these features, all in `default` (release-scope
+    rule):
+    - `bridge-common/iec61937`: the IEC 61937 transport branch of
+      `PluginBridge::push_packet`, with its burst-type routing. The MFT only
+      pushes `RInputTransport::Raw`.
+    - `bridge-family-dolby/truehd` and `bridge-family-dolby/eac3`: each
+      codec's decode path and its crate (`truehd`, `eac3`), and the raw-codec
+      sniffing between them.
+      - `bridge-family-dolby/iec61937` gets the S/PDIF and MAT paths
+        (`eac3_spdif.rs`, `mat.rs`).
+      - `bridge-family-dolby/atmos` gets TrueHD presentation 3 and its
+        objects: the OAMD-to-event path (`metadata.rs`) and the spatial
+        labels.
+      - Without it, `presentation` takes 0–2 and `best` means 2. The MFT
+        never asks for 3, so that path would otherwise sit in the DLL unused.
+    - `bridge-family-dts/dtsx`: the DTS:X extension path (`build_x_frame`,
+      the fold plan, estimator and renderer, `dts-fold.yaml` with
+      `serde_yaml_ng`).
+      - `bridge-family-dts/auro` gets the Auro-3D unfold and the `auro`
+        crate.
+      - `bridge-family-dts/iec61937` gets `dts_spdif.rs`.
+      - Without `dtsx` and `auro`, a frame is `bed_only_frame`'s, as for a
+        stream with no extension today.
+    - `dca/dtsx`: the extension-waveform decode in `dca` (`HdFrame::x_samples`,
+      `dcadec/xll.rs`, `spatial.rs`). Phase 6 step 1 first checks how far it
+      separates from the XLL bed decode; without it, `dca` decodes the core
+      and the XLL bed only.
+
+    **Left out of the MFT DLL** under D11, asserted by
+    `check-crate-isolation.sh` (Phase 6 step 3):
+    - `orender_engine` and `renderer`, and what only they bring: `live_log`,
+      `runtime_control`, `script_backend`, `mlua`, `rosc`, `socket2`,
+      `rayon`, `realfft`, `regex`, `serde_json`, `env_logger`, `omniphony_geometry`,
+      `omniphony-osc-contract`;
+    - `eac3` and `auro`. `truehd` keeps its own dependencies (`oamd`
+      included): the MFT does not take features out of the decoder crates
+      the CLI shares, other than `dca/dtsx`.
+    - everything the check already excludes (IAMF, the plugin crates, the
+      CLI's crates).
+    - Code paths within linked crates that are compiled out as above:
+      IEC 61937, E-AC-3, TrueHD objects, DTS:X, Auro-3D.
+    - `bridge_common::plugin::root_module` and the probes are generic or
+      unreferenced and do not reach the DLL. A symbol check on the built DLL
+      confirms it (Phase 6 step 3).
+  - **Gate:** Phase 6. Each measurement says which result keeps the engine
+    (D2 as written). D11 replaces D2 only if none of them does.
 
 Fixed identifiers, so every phase and every machine agree:
 
@@ -411,6 +708,17 @@ wmplayer.exe
                          │
                          ▼  float32 PCM IMFSample, WAVEFORMATEXTENSIBLE mask = endpoint's
  └─ Streaming Audio Renderer (SAR) ─ WASAPI shared mode ─ speakers
+```
+
+Under D11, if Phase 6's gate lets it in, the middle becomes:
+
+```
+                 portable/ Session ── FormatBridgeBox (bridge_common::plugin::new_bridge)
+                                     ├─ bridge-family-dolby [truehd]   presentation 0/1/2 by mask
+                                     ├─ bridge-family-dts   [no dtsx, no auro]  lossless bed
+                                     └─ label → mask routing (fixed table), DRC ramp
+                         │
+                         ▼  float32 PCM, mask = endpoint's (headphones: Windows virtualises, F16)
 ```
 
 ### The MFT contract (what `com/transform.rs` implements)
@@ -450,10 +758,17 @@ the session and returns `E_UNEXPECTED`, because nothing may unwind into
 - Duration is `n_frames * 10_000_000 / rate` (in 100 ns).
 - After a reset, the first block re-anchors on its own `input_pts_us`.
 - Input with no time leaves the running clock as it is.
+- Under D11 the session does what the engine does here
+  (`Engine::render_decoded`): the first block of a push takes the push's
+  time. The latency is 0, since nothing buffers. The rules above are
+  otherwise unchanged.
 
 **Format changes.** The engine always renders to the layout it was built
 with, so the output type never changes mid-stream, whatever the content does
 (5.1 bed, objects, a presentation switch).
+- Under D11 the routing table plays that part. It is rebuilt when a frame's
+  labels change, and always mixes into the session's mask. The output type
+  stays fixed in the same way.
 
 - If a decoded stream's rate differs from the rate the session was built
   with, the engine's behaviour must be checked first: look at how
@@ -516,6 +831,10 @@ are ones `label_for_name` maps to the label in the third column:
 - The YAML is written to `%LOCALAPPDATA%\harletty\mf\layout-<mask>.yaml`,
   only when absent or different, because `from_paths` takes a path. A mask
   with no speaker left falls back to stereo.
+- Under D11 the bits, labels and positions stay: the positions place labels
+  that have no bit. The YAML, its file and the `renderer` layout-loader test
+  go, and so does the forced binaural plan for masks of two speakers or
+  fewer.
 
 ## Files
 
@@ -564,6 +883,33 @@ Changed:
 - `.github/workflows/windows-arm64.yml` and a new x64 job: Phases 1, 2 and 4.
 - `.github/workflows/release.yml`: Phase 4.
 - `README.md`: Phase 4, one short section linking `docs/media-foundation.md`.
+
+Under D11 (Phase 6), only if the gate lets it in:
+
+- `mf-decoder/Cargo.toml`: drop `orender_engine` and `renderer`. Take
+  `bridge-common`, `bridge-family-dolby` and `bridge-family-dts` with
+  `default-features = false` and the features in D11, "Build contents".
+- `mf-decoder/src/portable/session.rs`: the session over `FormatBridgeBox`,
+  with the routing and the DRC ramp. `assemble.rs` is deleted.
+  `layout.rs` keeps the table and loses the YAML and `plan`.
+- `mf-decoder/src/portable/codecs.rs`: drop the E-AC-3 and AC-3 rows.
+- `mf-decoder/install/`: drop `mf-config.yaml` and `-WithDolbyDigital`.
+- `mf-decoder/tests/`: the `from_paths` reference comparisons
+  (`Session::open_reference`) go. The bridge cdylib dev-dependencies go with
+  them.
+- `bridge-common`, `bridge-family-dolby`, `bridge-family-dts`, `dca`: the new
+  features, all in `default` (release-scope rule).
+- `scripts/check-crate-isolation.sh`: the MFT check also forbids
+  `orender_engine`, `renderer`, `live_log`, `runtime_control`,
+  `script_backend`, `mlua`, `rosc`, `socket2`, `rayon`, `realfft`,
+  `env_logger`, `eac3` and `auro`.
+  - It runs under the MFT's own feature set.
+  - The `env_logger` exception goes.
+  - A new step asserts the plugin and CLI packages resolve the same crates
+    with the same features as before.
+- `LICENSES/binary-mf.txt`: the engine paragraph goes. GPL-3.0 stays,
+  because of `bridge_api`.
+- `docs/media-foundation.md`: speakers and headphones as D11 has them.
 
 ## Phases
 
@@ -910,10 +1256,18 @@ zips and the clean-machine check passes.
   assembly (D10) then shrinks to a call. It needs an Omniphony pull request
   and a pin bump. The one-file DLL does not wait for it: Phase 3 already
   ships one.
+  - Only worth doing if Phase 6's gate keeps the engine. Under D11 the MFT
+    builds no engine, and the item is dropped.
 - **Spatial objects to Windows Sonic / Dolby Atmos for headphones:** output
   `MFAudioFormat_Float_SpatialObjects` (F6). Research first: which metadata
   format ids the in-box spatial renderers accept, and whether a third-party
   decoder can use one.
+  - What the documentation gives is in F6: no public format id. The research
+    starts from inspecting what Microsoft's own pipeline negotiates when
+    Dolby Access is installed, not from the documentation.
+  - It is the one route by which objects, and heights, would reach Windows
+    from an MFT. With D11 in place it would be a separate MFT feature, built
+    only if it works.
 - **IAMF and elementary streams:** a byte-stream handler / media source of
   our own for `.mka`/`.mkv` with IAMF (see Omniphony
   `docs/iamf-matroska-mapping.md`) and for `.thd`/`.dts`/`.eac3`. This is
@@ -922,6 +1276,110 @@ zips and the clean-machine check passes.
   in-process kind needs Microsoft to grant `inProcessMediaExtension` (F3),
   which is out of our control. The app-service kind (F12) is open to us if
   Phase 0 step 4.5 shows it works, and would get a plan of its own.
+
+### Phase 6: a decoder without the renderer (D11), behind a gate
+
+Phase 6 does not wait for Phase 5's items. It changes nothing until its gate
+holds.
+
+**Gate.** Four **(Windows desktop)** measurements, made with the MFT as it
+ships today (Phase 4) and recorded in `docs/media-foundation-findings.md`.
+Each says what result keeps the engine, that is D2 as written, with Phase 6
+stopping here. If one does, the result goes into F16 or F6 and D11 is marked
+rejected. Only if none does do the steps below start.
+
+1. **Headphones** (F16). On a headphone endpoint, read the shared-mode mix
+   format's mask (the MFT's log prints it) with Windows Sonic for Headphones
+   off, then on.
+   - With it on, play a TrueHD file in WMP and in the WinRT `MediaPlayer`,
+     with `speaker_mask: 0x63F` in `mf.yaml` if the mix format is not 7.1.
+   - Record whether the sound is virtualised: front, side and back speaker
+     test tones are heard apart.
+   - **Keeps the engine:** Windows does not virtualise a 7.1 stream from a
+     Media Foundation player. Without the engine, headphones would then get
+     plain stereo, and the engine's binaural stage is worth what it costs.
+2. **Heights.** On every endpoint at hand, Dolby Atmos for home theater or
+   headphones and any 7.1.4-capable virtual device included, set
+   `speaker_mask` to 7.1.4 (`0x2D63F`).
+   - Record whether WMP and the WinRT `MediaPlayer` accept the 12-channel
+     float type.
+   - Record whether a test signal on `SPEAKER_TOP_*` comes out from above,
+     or is folded or dropped.
+   - **Keeps object rendering:** heights come out as heights on an endpoint a
+     user can have. Then the presentation-only design would throw away
+     speakers that work.
+   - Object rendering is then either the engine, or the small panner as an
+     MFT feature (D11, "Not chosen"). Measurement 3 decides which.
+3. **Listening and metrics.** A full-length TrueHD Atmos title and a DTS:X
+   title, on a 7.1 and a 5.1 system:
+   - today's engine render, against presentation 2 or 1 (TrueHD) and the
+     lossless bed (DTS:X). Until Phase 6 step 2 exists, take the bed from
+     FFmpeg's DCA decoder, which decodes DTS-HD MA and, as far as known,
+     ignores the DTS:X extension (*verify* it on the stream used);
+   - blind A/B, plus per-channel level and correlation, as F15 measured them.
+   - **Keeps the engine:** the engine's render is preferred, or the bed is
+     found to lack content the engine places (a DTS:X stream whose objects
+     the bed does not fold).
+4. **A 5.1-core Atmos TrueHD stream** (no 8-channel presentation): asking for
+   presentation 2 must give the 6-channel presentation, not the object one.
+   - This is a check of D11 itself, and not an engine keeper.
+   - If it fails, the Dolby family needs a feature exposing the presentation
+     map, and the MFT selects from it.
+
+**Steps**, after the gate:
+
+1. **Audit and name the features.**
+   - Find where each path in D11's "Build contents" starts and ends in
+     `bridge-common`, the two families and `dca`.
+   - Check that `dca`'s extension-waveform decode separates from the XLL bed
+     decode. If it does not, `dca/dtsx` is dropped and the bed decode keeps
+     it, which is recorded here as a known exception to "nothing dormant".
+   - Write the final feature names into D11.
+2. **The features, in the shared crates.** One pull request, nothing of the
+   MFT in it, under the release-scope rule.
+   - Each feature is in `default`. The plugin, combined-bridge and CLI
+     manifests are untouched.
+   - Its description carries the check:
+     - the existing tests pass, unedited;
+     - `tools/host-baseline` before and after is bit for bit equal;
+     - `cargo tree -e features` of `harletty-dolby-bridge`,
+       `harletty-dts-bridge`, `harletty-iamf-bridge`, `harletty-bridge` and
+       `harletty` resolve the same crates;
+     - `cargo build --no-default-features` (plus each feature alone) builds
+       for every changed crate.
+   - A unit test in `bridge-family-dts` checks that, built without `dtsx` and
+     `auro`, a DTS:X frame decodes to the bed `bed_only_frame` gives.
+3. **The MFT without the engine** (D11, "Files"):
+   - the session over `FormatBridgeBox`, the routing table and the DRC ramp;
+   - dependencies with `default-features = false`;
+   - `check-crate-isolation.sh` extended as in "Files". It runs the MFT check
+     under the MFT's features, and compares the plugin and CLI feature
+     resolution against a baseline committed in step 2;
+   - a link-map check of the release DLL (`/MAP`; on Linux the cdylib's
+     `-Map`) that no symbol of `orender_engine`, `renderer`, `eac3` or
+     `auro`, and none of the IEC 61937 paths, is in it.
+4. **Tests** (portable, Linux and Windows CI):
+   - for each mask, the TrueHD presentation chosen, and the output equal, bit
+     for bit, to that presentation routed by the table;
+   - the routing table for every label set the fixtures and the corpus give;
+   - the DRC ramp against `orender_engine::render::fill_pcm_f32_drc` on the
+     same frames, as a dev-dependency only, so the DLL does not link it;
+   - the timestamp rules, as today.
+5. **Release and documentation:**
+   - the MFT archive changes; the bridge and CLI archives do not, and the
+     release dry run shows their file lists and sizes against the last
+     release;
+   - `LICENSES/binary-mf.txt`, `docs/media-foundation.md`, the installer.
+6. **(Windows desktop)** The Phase 2 set in WMP on speakers, and gate
+   measurement 1 again with the new DLL on headphones.
+
+Done when:
+
+- the gate is recorded and passed;
+- the release-scope check holds;
+- the crate-isolation and link-map checks show none of the left-out code in
+  the DLL;
+- the desktop checks pass.
 
 ## Verification matrix
 
@@ -939,6 +1397,10 @@ zips and the clean-machine check passes.
 | WMP plays TrueHD/Atmos, DTS/DTS:X MKV; seek, sync | Windows desktop | 1–2 |
 | soak (memory, handles) | Windows desktop | 3 |
 | install / uninstall from the release zip | Windows desktop (clean VM) | 4 |
+| D11 gate: headphone virtualisation, heights, A/B, 5.1-core Atmos | Windows desktop | 6 |
+| bridge and CLI output and feature resolution unchanged (release scope) | Linux CI + local corpus (`tools/host-baseline`) | 6 |
+| the MFT links none of the engine, E-AC-3, TrueHD-object, Auro, DTS:X or IEC 61937 code (crate isolation, link map) | Linux + Windows CI | 6 |
+| presentation choice, routing table, DRC ramp, timestamps without the engine | Linux + Windows CI | 6 |
 
 ## Risks and open questions
 
@@ -952,6 +1414,7 @@ zips and the clean-machine check passes.
   acceptable: D6 makes those codecs opt-in, and objects in E-AC-3 are the
   only loss.
 - **Engine start-up time** blocks topology resolution (Phase 2, step 7).
+  Measured 15–36 ms on Linux x86-64 (F15); Windows ARM64 is not measured.
 - **Global state in `orender_engine` inside a long-lived host process.**
   `overlay`, the live-log logger, OSC, `migrate_legacy_windows_config` and
   the live sidecar (F9). The MFT calls none of the OSC or logging entry
@@ -960,6 +1423,9 @@ zips and the clean-machine check passes.
   request. From Phase 3 the MFT assembles the engine itself (D10) and leaves
   out the overlay prefs and the sidecar, so what remains is in `Engine::new`
   and what it calls.
+  - That includes threads that outlive the file being played: a process-wide
+    rayon pool and a layout-follower thread per renderer (F15). D11 removes
+    them.
 - **Decode thread.** The engine's `decode_thread` moves a packet's audio to a
   later call. The MFT's queue and the timestamp rules handle that (output is
   keyed on `input_pts_us`), but drain must then return the held packets.
@@ -971,12 +1437,33 @@ zips and the clean-machine check passes.
   player at the user's choice, as the bridges load into hosts. The release
   ships the licence texts (Phase 4). Nothing here changes the decoders'
   licences (`LICENSES/`).
+  - D11 does not change this: without the engine the DLL still links
+    `bridge_api` through the families, and stays GPL-3.0-or-later (D10).
 - **Omniphony API drift.** `orender_engine` is not a stable API. A pin bump
   that changes `Engine::from_paths` or `RenderedAudio` breaks only this
   crate, and CI shows it at the bump. The MFT's copy of the engine assembly
   (D10) can also fall behind silently, with a step `from_paths` gained. The
   Phase 3 test comparing it with `from_paths` turns that into a CI failure
   at the bump.
+  - At the pin, `orender_engine` and `renderer` had 754 commits since May
+    2026, against 24 for `bridge_api`.
+  - Under D11 only `bridge_api` is tracked, and the assembly copy goes.
+- **Losing the binaural stage (D11).** If Windows does not virtualise a 7.1
+  stream for headphones, the engine stays (Phase 6, gate measurement 1).
+  - If it does, the in-MFT HRTF stage goes. What remains is Windows'
+    virtualisation, whose quality this plan does not control.
+- **Cargo feature unification.** The features of one package are the union
+  over everything built in the same `cargo` invocation.
+  - That is why D11's features only add code: unification can then only put
+    more into the MFT, never change a plugin.
+  - It is also why `release.yml` keeps the MFT in a `cargo build` of its own.
+  - A workspace-wide build or test (`--workspace`, or the MFT's
+    dev-dependencies) may compile the MFT with more than it ships. The
+    crate-isolation and link-map checks run on the release build for that
+    reason.
+- **The upstream release changing by accident.** Any pull request that
+  touches a shared crate carries the release-scope check. A missing check is
+  a reason to reject the pull request.
 
 ## References
 
