@@ -40,8 +40,11 @@ function Get-OsArchitecture {
 
 # regsvr32 /s, with its exit code turned into a message.
 function Invoke-Regsvr32([string]$Dll, [switch]$Unregister) {
-    $flags = if ($Unregister) { '/s', '/u' } else { '/s' }
-    $p = Start-Process -FilePath (Get-Regsvr32) -ArgumentList ($flags + "`"$Dll`"") -Wait -PassThru
+    # An array even for one flag: a lone string would be glued to the path.
+    $arguments = @('/s')
+    if ($Unregister) { $arguments += '/u' }
+    $arguments += "`"$Dll`""
+    $p = Start-Process -FilePath (Get-Regsvr32) -ArgumentList $arguments -Wait -PassThru
     if ($p.ExitCode -ne 0) {
         $verb = if ($Unregister) { 'unregister' } else { 'register' }
         throw "regsvr32 could not $verb $Dll (exit code $($p.ExitCode))."
