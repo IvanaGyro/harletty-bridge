@@ -18,6 +18,9 @@ crate-type = ["cdylib", "rlib"]
 # crate is a dependency here: the decoders are the bridge DLLs, loaded from
 # this DLL's folder at run time (scripts/check-crate-isolation.sh).
 bridge_api = { version = "0.6.0", path = "../../Omniphony/omniphony-renderer/bridge_api" }
+# The renderer behind liborender, as a Rust crate: loads the bridge DLLs and
+# renders objects to a speaker layout. Decoders stay in the bridge DLLs.
+orender_engine = { path = "../../Omniphony/omniphony-renderer/orender_engine" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
@@ -27,6 +30,11 @@ serde_yaml_ng = "0.10"
 bridge-common = { version = "0.9.0", path = "../bridge-common" }
 bridge-family-dolby = { version = "0.9.0", path = "../bridge-family-dolby" }
 bridge-family-dts = { version = "0.9.0", path = "../bridge-family-dts" }
+# Not linked by the tests: depending on the plugin crates makes cargo build
+# their cdylibs, the bridge libraries the session tests load (the same trick
+# Omniphony's engine tests use for its reference bridge).
+harletty-dolby-bridge = { version = "0.9.0", path = "../plugin-dolby" }
+harletty-dts-bridge = { version = "0.9.0", path = "../plugin-dts" }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"

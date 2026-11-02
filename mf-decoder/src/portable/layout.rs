@@ -78,6 +78,49 @@ pub fn speakers(mask: u32) -> Vec<Speaker> {
         .collect()
 }
 
+/// 7.1.4, the layout rendered to virtually when the real one is too small.
+pub const SEVEN_ONE_FOUR: u32 = 0x63F | 0x1000 | 0x4000 | 0x8000 | 0x20000;
+
+/// What the engine renders for an output mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Plan {
+    /// The channels the output carries: the mask, or stereo when binaural.
+    pub output_mask: u32,
+    /// The speaker layout the engine pans to.
+    pub render_mask: u32,
+    /// Render straight to two channels through an HRTF, bypassing the panner
+    /// (the engine's binaural stage). The engine will not start with fewer
+    /// than three speakers, so stereo (and mono) output gets a full layout
+    /// that only places the beds.
+    pub binaural: bool,
+}
+
+/// How to render for `mask` (see [`Plan`]).
+pub fn plan(mask: u32) -> Plan {
+    let mask = effective_mask(mask);
+    if mask.count_ones() >= 3 {
+        Plan {
+            output_mask: mask,
+            render_mask: mask,
+            binaural: false,
+        }
+    } else {
+        Plan {
+            output_mask: STEREO,
+            render_mask: SEVEN_ONE_FOUR,
+            binaural: true,
+        }
+    }
+}
+
+/// The engine configuration that switches on the binaural stage.
+pub const BINAURAL_CONFIG: &str = "render:\n  binaural:\n    output_mode: binaural\n";
+
+/// The channel labels of `mask`'s speakers, in output order.
+pub fn labels(mask: u32) -> Vec<RChannelLabel> {
+    speakers(mask).iter().map(|s| s.label).collect()
+}
+
 /// The layout as the YAML file `Engine::from_paths` reads.
 pub fn layout_yaml(mask: u32) -> String {
     let mask = effective_mask(mask);
@@ -131,6 +174,30 @@ mod tests {
         assert_eq!(effective_mask(0), STEREO);
         assert_eq!(effective_mask(0x10000), STEREO); // top back centre only
         assert_eq!(effective_mask(0x10000 | 0x4), 0x4);
+    }
+
+    #[test]
+    fn two_or_fewer_speakers_render_binaurally_from_a_full_layout() {
+        assert_eq!(
+            plan(0x3),
+            Plan {
+                output_mask: STEREO,
+                render_mask: SEVEN_ONE_FOUR,
+                binaural: true
+            }
+        );
+        assert_eq!(plan(0x4).output_mask, STEREO); // mono output is given stereo
+        assert_eq!(plan(0).binaural, true);
+        let five_one = plan(0x3F);
+        assert_eq!(
+            (
+                five_one.output_mask,
+                five_one.render_mask,
+                five_one.binaural
+            ),
+            (0x3F, 0x3F, false)
+        );
+        assert_eq!(plan(0x7).output_mask, 0x7); // three is enough for the panner
     }
 
     #[test]

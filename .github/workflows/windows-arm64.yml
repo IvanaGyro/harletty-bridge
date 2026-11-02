@@ -134,14 +134,19 @@ jobs:
         env:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
-          cargo build --release --locked -p harletty-mf-decoder
+          cargo build --release --locked -p harletty-mf-decoder -p harletty-dolby-bridge -p harletty-dts-bridge
           cargo test --release --locked -p harletty-mf-decoder
         working-directory: harletty-bridge
 
-      - name: Upload the decoder
+      # The decoder loads the bridge DLLs from its own folder: keep the three
+      # together.
+      - name: Upload the decoder and its bridges
         uses: actions/upload-artifact@v7
         with:
           name: harletty-mf-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
-          path: harletty-bridge/target/release/harletty_mf.dll
+          path: |
+            harletty-bridge/target/release/harletty_mf.dll
+            harletty-bridge/target/release/harletty_dolby_bridge.dll
+            harletty-bridge/target/release/harletty_dts_bridge.dll
           if-no-files-found: error
           retention-days: 30
