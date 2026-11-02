@@ -92,7 +92,7 @@ jobs:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
           cargo build --release --locked -p harletty-mf-decoder -p harletty-mf-player-probe
-          cargo test --release --locked -p harletty-mf-decoder
+          cargo test --release --locked -p harletty-mf-decoder -- --nocapture
         working-directory: harletty-bridge
 
       - name: Check the plugin libraries exist
@@ -180,7 +180,7 @@ jobs:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
           cargo build --release --locked -p harletty-mf-decoder -p harletty-mf-player-probe
-          cargo test --release --locked -p harletty-mf-decoder
+          cargo test --release --locked -p harletty-mf-decoder -- --nocapture
         working-directory: harletty-bridge
 
       # The decoder is one file: the Dolby and DTS decoders are linked in (plan

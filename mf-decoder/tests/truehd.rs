@@ -358,6 +358,11 @@ fn soak_neither_memory_nor_handles_grow() {
         rest.iter().map(|r| r.0).fold(0.0, f64::max),
         rest.iter().map(|r| r.1).max().unwrap(),
     );
+    eprintln!(
+        "soak: {} rounds; baseline {base_mib:.1} MiB / {base_handles} handles, \
+         highest after {top_mib:.1} MiB / {top_handles} handles",
+        series.len()
+    );
     assert!(
         top_mib <= base_mib + 30.0,
         "memory grew: {base_mib:.1} -> {top_mib:.1} MiB"
