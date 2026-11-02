@@ -122,6 +122,6 @@ Write-Host "Log:       $env:LOCALAPPDATA\harletty\mf\harletty-mf.log (per user)"
 Write-Host 'Programs that are already playing must be restarted to see the decoder.'
 Write-Host ''
 Write-Host 'To undo:'
-$uninstall = "& '$(Join-Path $InstallDir 'uninstall.ps1')'"
-if ($InstallDir -ne $script:DefaultDir) { $uninstall += " -InstallDir '$InstallDir'" }
-Write-Host "  $uninstall"
+$undoCommand = "& '$(Join-Path $InstallDir 'uninstall.ps1')'"
+if ($InstallDir -ne $script:DefaultDir) { $undoCommand += " -InstallDir '$InstallDir'" }
+Write-Host "  $undoCommand"
