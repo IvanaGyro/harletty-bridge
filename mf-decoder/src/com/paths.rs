@@ -29,7 +29,7 @@ pub fn dll_file() -> windows::core::Result<PathBuf> {
     }
 }
 
-/// The folder holding this DLL (and, later, the bridge DLLs and `mf.yaml`).
+/// The folder holding this DLL (and `mf.yaml`, `mf-config.yaml`).
 pub fn dll_dir() -> Option<PathBuf> {
     dll_file().ok()?.parent().map(PathBuf::from)
 }
@@ -50,15 +50,6 @@ pub fn load_config() -> crate::portable::config::MfConfig {
     crate::portable::config::MfConfig::load(&folders)
 }
 
-/// Where the bridge DLLs are: `HARLETTY_MF_BRIDGE_DIR` (for tests and
-/// troubleshooting), else `bridge_dir` in `mf.yaml`, else this DLL's folder.
-pub fn bridge_dir(config: &crate::portable::config::MfConfig) -> Option<PathBuf> {
-    std::env::var_os("HARLETTY_MF_BRIDGE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| config.bridge_dir.as_ref().map(PathBuf::from))
-        .or_else(dll_dir)
-}
-
 /// An engine configuration of the user's own (`mf-config.yaml`, in Omniphony's
 /// `config.yaml` schema), from the per-user folder and then next to the DLL.
 /// Not Omniphony's shared config: the engine consumes a live-handoff file
@@ -71,15 +62,11 @@ pub fn engine_config() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Everything a session needs to find, or why it cannot.
-pub fn session_setup(
-    config: &crate::portable::config::MfConfig,
-) -> Result<crate::portable::session::Setup, String> {
-    let bridge_dir = bridge_dir(config).ok_or("cannot find the folder of the DLL")?;
+/// Where a session puts its files and what configures its engine.
+pub fn session_setup() -> crate::portable::session::Setup {
     let work_dir = user_dir().unwrap_or_else(|| std::env::temp_dir().join("harletty-mf"));
-    Ok(crate::portable::session::Setup {
-        bridge_dir,
+    crate::portable::session::Setup {
         work_dir,
         engine_config: engine_config(),
-    })
+    }
 }

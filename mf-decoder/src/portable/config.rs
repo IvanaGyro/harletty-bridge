@@ -26,8 +26,6 @@ pub struct MfConfig {
     /// The codecs to register, by `option` name (`truehd`, `dts`, `eac3`,
     /// `ac3`); the codec table's defaults when absent.
     pub codecs: Option<Vec<String>>,
-    /// Where the bridge DLLs are; the folder of this DLL when absent.
-    pub bridge_dir: Option<String>,
     /// `off` … `trace`; `info` when absent.
     pub log_level: Option<String>,
     /// Where to log; `%LOCALAPPDATA%\harletty\mf\harletty-mf.log` when absent.
@@ -79,9 +77,6 @@ impl MfConfig {
         }
         if other.codecs.is_some() {
             self.codecs = other.codecs;
-        }
-        if other.bridge_dir.is_some() {
-            self.bridge_dir = other.bridge_dir;
         }
         if other.log_level.is_some() {
             self.log_level = other.log_level;

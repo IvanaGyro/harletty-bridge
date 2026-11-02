@@ -5,6 +5,8 @@ mod endpoint;
 mod exports;
 mod factory;
 mod logger;
+#[cfg(test)]
+mod panic_tests;
 mod paths;
 mod registry;
 mod transform;

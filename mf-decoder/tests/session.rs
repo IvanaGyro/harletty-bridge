@@ -1,8 +1,10 @@
 //! The session on the real engine and the real bridge libraries, decoding the
 //! repository's own fixtures (the E-AC-3 JOC and DTS ones the bridge tests use).
 //!
-//! The bridge libraries are the cdylibs cargo builds because the plugin crates
-//! are dev-dependencies; they sit next to this test's executable.
+//! The decoders are linked into the library (plan D10). The reference session
+//! loads the same families as bridge DLLs through `Engine::from_paths`: the
+//! cdylibs cargo builds because the plugin crates are dev-dependencies, next to
+//! this test's executable.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +33,6 @@ fn bridge_dir() -> PathBuf {
 fn setup(tag: &str) -> Setup {
     let work = std::env::temp_dir().join(format!("harletty-mf-{tag}-{}", std::process::id()));
     Setup {
-        bridge_dir: bridge_dir(),
         work_dir: work,
         engine_config: None,
     }
@@ -125,13 +126,192 @@ fn reset_forgets_the_stream_but_not_the_setup() {
     assert_eq!(second[0].start_hns, first[0].start_hns);
 }
 
+/// The linked-in session is the bridge-DLL session: same engine, same
+/// output, bit for bit, on every fixture and every output.
+#[test]
+fn linked_in_decoders_equal_the_bridge_dlls() {
+    let cases: [(&str, &[u8], u32); 4] = [
+        ("eac3", EAC3, SEVEN_ONE_FOUR),
+        ("eac3", EAC3, STEREO),
+        ("dts", DTS, STEREO),
+        ("dts", DTS, SEVEN_ONE_FOUR),
+    ];
+    for (option, stream, mask) in cases {
+        let codec = codec(option);
+        let mut linked = Session::open(codec, 48_000, mask, &setup("linked")).expect("linked");
+        let mut reference =
+            Session::open_reference(codec, 48_000, mask, &setup("ref"), &bridge_dir())
+                .expect("reference");
+        let (a, b) = (
+            decode(&mut linked, stream, 4 * 1024),
+            decode(&mut reference, stream, 4 * 1024),
+        );
+        assert!(!a.is_empty(), "{option} 0x{mask:X}: no output");
+        assert_eq!(a, b, "{option} 0x{mask:X}: the two sessions differ");
+    }
+}
+
 #[test]
 fn a_missing_bridge_is_an_error_naming_the_file() {
-    let mut setup = setup("missing");
-    setup.bridge_dir = Path::new("no-such-folder").to_path_buf();
-    let err = Session::open(codec("dts"), 48_000, STEREO, &setup).unwrap_err();
+    let err = Session::open_reference(
+        codec("dts"),
+        48_000,
+        STEREO,
+        &setup("missing"),
+        Path::new("no-such-folder"),
+    )
+    .unwrap_err();
     assert!(
         err.contains("not found") && err.contains("harletty_dts_bridge"),
         "{err}"
     );
+}
+
+/// A deterministic stream of pseudo-random numbers, so a failure reproduces.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+}
+
+/// Feed `stream` to a fresh session in 1 KiB pieces, ignoring what comes out:
+/// the point is only that it returns. Errors are fine (a host reports them and
+/// goes on); a panic or a hang is not.
+fn survives(option: &str, stream: Vec<u8>, label: &str) {
+    let (done, result) = std::sync::mpsc::channel();
+    let option = option.to_owned();
+    let tag = label.to_owned();
+    std::thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(|| {
+            let mut session =
+                Session::open(codec(&option), 48_000, STEREO, &setup(&tag)).expect("open");
+            for piece in stream.chunks(1024) {
+                // The transform resets after an error; so does this.
+                if session.push(piece, None).is_err() {
+                    session.reset();
+                }
+            }
+            let _ = session.drain();
+        });
+        let _ = done.send(outcome.is_ok());
+    });
+    match result.recv_timeout(std::time::Duration::from_secs(120)) {
+        Ok(true) => {}
+        Ok(false) => panic!("{label}: the session panicked"),
+        Err(_) => panic!("{label}: the session did not return"),
+    }
+}
+
+#[test]
+fn corrupted_and_truncated_streams_never_panic_or_hang() {
+    for (option, fixture) in [("eac3", EAC3), ("dts", DTS)] {
+        let mut rng = Lcg(0x5EED);
+        // Truncated anywhere, including mid-frame.
+        for cut in [1, 7, fixture.len() / 3, fixture.len() / 2 + 1] {
+            survives(
+                option,
+                fixture[..cut].to_vec(),
+                &format!("{option}-cut{cut}"),
+            );
+        }
+        // Bits flipped: a few, many, and in the header of the first frame.
+        for (n, label) in [(1, "one"), (16, "few"), (fixture.len() / 8, "many")] {
+            let mut bytes = fixture.to_vec();
+            for _ in 0..n {
+                let at = rng.next() as usize % bytes.len();
+                bytes[at] ^= 1 << (rng.next() % 8);
+            }
+            survives(option, bytes, &format!("{option}-flip-{label}"));
+        }
+        let mut head = fixture.to_vec();
+        for byte in head.iter_mut().take(16) {
+            *byte ^= 0xFF;
+        }
+        survives(option, head, &format!("{option}-head"));
+        // Garbage, and nothing sensible at all.
+        let garbage: Vec<u8> = (0..64 * 1024).map(|_| rng.next() as u8).collect();
+        survives(option, garbage, &format!("{option}-garbage"));
+        survives(option, vec![0; 64 * 1024], &format!("{option}-zeros"));
+        survives(option, vec![0xFF; 64 * 1024], &format!("{option}-ones"));
+    }
+}
+
+/// A session whose engine is configured by `yaml` (Omniphony's `config.yaml`
+/// schema), the way a user's `mf-config.yaml` configures it.
+fn configured(option: &str, mask: u32, yaml: &str, tag: &str) -> Session {
+    let mut setup = setup(tag);
+    std::fs::create_dir_all(&setup.work_dir).unwrap();
+    let path = setup.work_dir.join("mf-config.yaml");
+    std::fs::write(&path, yaml).unwrap();
+    setup.engine_config = Some(path);
+    Session::open(codec(option), 48_000, mask, &setup).unwrap_or_else(|e| panic!("open: {e}"))
+}
+
+fn render(session: &mut Session, stream: &[u8]) -> Vec<Block> {
+    decode(session, stream, 4 * 1024)
+}
+
+#[test]
+fn the_engine_takes_drc_from_the_config() {
+    let plain = render(
+        &mut Session::open(codec("eac3"), 48_000, STEREO, &setup("drc-plain")).unwrap(),
+        EAC3,
+    );
+    let off = render(
+        &mut configured("eac3", STEREO, "render:\n  drc_mode: Off\n", "drc-off"),
+        EAC3,
+    );
+    let heavy = render(
+        &mut configured(
+            "eac3",
+            STEREO,
+            "render:\n  drc_mode: heavy/RF\n",
+            "drc-heavy",
+        ),
+        EAC3,
+    );
+    // Off is the default; heavy compression changes the signal.
+    assert_eq!(plain, off, "drc_mode: Off is not the default");
+    assert_eq!(frames(&heavy), frames(&off));
+    assert_ne!(heavy, off, "drc_mode: heavy/RF changed nothing");
+}
+
+#[test]
+fn the_engine_takes_the_presentation_from_the_config() {
+    // A substream the stream does not have must not stop playback: the bridge
+    // keeps its default (the engine warns), and the audio is the default's.
+    let plain = render(
+        &mut Session::open(codec("eac3"), 48_000, STEREO, &setup("pres-plain")).unwrap(),
+        EAC3,
+    );
+    let asked = render(
+        &mut configured("eac3", STEREO, "render:\n  presentation: 3\n", "pres-3"),
+        EAC3,
+    );
+    assert!(!asked.is_empty());
+    assert_eq!(frames(&plain), frames(&asked));
+}
+
+#[test]
+fn a_config_that_does_not_parse_means_the_defaults_not_a_failure() {
+    let plain = render(
+        &mut Session::open(codec("dts"), 48_000, STEREO, &setup("cfg-plain")).unwrap(),
+        DTS,
+    );
+    let broken = render(
+        &mut configured(
+            "dts",
+            STEREO,
+            "render: [this is: not\n  a mapping",
+            "cfg-broken",
+        ),
+        DTS,
+    );
+    assert_eq!(plain, broken);
 }

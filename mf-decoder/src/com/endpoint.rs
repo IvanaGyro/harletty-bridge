@@ -2,6 +2,15 @@
 //! format. (`PKEY_AudioEndpoint_PhysicalSpeakers` would say what is plugged
 //! in; the mix format says what the audio engine mixes to, which is what the
 //! player's output is converted to anyway.)
+//!
+//! The mask is read once, when the input type is set and the session is built.
+//! If the default endpoint changes while a file plays (headphones plugged in,
+//! another device chosen), that file keeps the layout it started with and the
+//! player's own conversion carries it to the new device; the next file is
+//! built with the new endpoint's mask. `mf.yaml`'s `speaker_mask` pins a mask
+//! regardless of the endpoint. Rebuilding mid-stream
+//! (`MF_E_TRANSFORM_STREAM_CHANGE`) is not done: it is optional in the plan
+//! and only worth it if WMP renegotiates cleanly, which no test has shown.
 
 use windows::Win32::Media::Audio::{
     IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,

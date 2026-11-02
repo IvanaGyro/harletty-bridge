@@ -69,13 +69,30 @@ jobs:
 
       # Not a default member: built and tested on its own. The registration
       # test writes under HKLM, which the hosted runner may do.
+      # Real TrueHD for the decoder tests: downloaded here, never committed.
+      - name: Download the TrueHD samples
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/truehd"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/atmos.thd" \
+            https://fate-suite.ffmpeg.org/truehd/atmos.thd
+          curl -fsSL --retry 3 -o "$dir/ffvii.mkv" \
+            'https://samples.ffmpeg.org/A-codecs/TrueHD/TrueHD%20Sample%201%20%28Final%20Fantasy%20VII%20Advent%20Children%29.mkv'
+          ls -l "$dir"
+          echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
+          echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
+          # The soak test (plan, Phase 3 step 6) with no player: repeated
+          # open/decode/seek/drop of the real track; memory and handles must stay flat.
+          echo "HARLETTY_MF_SOAK_SECS=120" >> "$GITHUB_ENV"
+
       - name: Build and test the Media Foundation decoder (release)
         shell: bash
         env:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
-          cargo build --release --locked -p harletty-mf-decoder
-          cargo test --release --locked -p harletty-mf-decoder
+          cargo build --release --locked -p harletty-mf-decoder -p harletty-mf-player-probe
+          cargo test --release --locked -p harletty-mf-decoder -- --nocapture
         working-directory: harletty-bridge
 
       - name: Check the plugin libraries exist
@@ -98,7 +115,18 @@ jobs:
             harletty-bridge/target/release/harletty_dts_bridge.dll
             harletty-bridge/target/release/harletty_iamf_bridge.dll
             harletty-bridge/target/release/harletty.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # The decoder for Windows Media Player and other Media Foundation
+      # players: a set of its own, no bridge DLL (plan D10).
+      - name: Upload the Media Foundation decoder and the probe
+        uses: actions/upload-artifact@v7
+        with:
+          name: harletty-mf-windows-arm64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
             harletty-bridge/target/release/harletty_mf.dll
+            harletty-bridge/target/release/mf-player-probe.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -129,24 +157,41 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Real TrueHD for the decoder tests: downloaded here, never committed.
+      - name: Download the TrueHD samples
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/truehd"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/atmos.thd" \
+            https://fate-suite.ffmpeg.org/truehd/atmos.thd
+          curl -fsSL --retry 3 -o "$dir/ffvii.mkv" \
+            'https://samples.ffmpeg.org/A-codecs/TrueHD/TrueHD%20Sample%201%20%28Final%20Fantasy%20VII%20Advent%20Children%29.mkv'
+          ls -l "$dir"
+          echo "HARLETTY_MF_TRUEHD_DIR=$dir" >> "$GITHUB_ENV"
+          echo "HARLETTY_MF_REQUIRE_TRUEHD=1" >> "$GITHUB_ENV"
+          # The soak test (plan, Phase 3 step 6) with no player: repeated
+          # open/decode/seek/drop of the real track; memory and handles must stay flat.
+          echo "HARLETTY_MF_SOAK_SECS=120" >> "$GITHUB_ENV"
+
       - name: Build and test the Media Foundation decoder (release)
         shell: bash
         env:
           HARLETTY_MF_REGISTRY_TEST: "1"
         run: |
-          cargo build --release --locked -p harletty-mf-decoder -p harletty-dolby-bridge -p harletty-dts-bridge
-          cargo test --release --locked -p harletty-mf-decoder
+          cargo build --release --locked -p harletty-mf-decoder -p harletty-mf-player-probe
+          cargo test --release --locked -p harletty-mf-decoder -- --nocapture
         working-directory: harletty-bridge
 
-      # The decoder loads the bridge DLLs from its own folder: keep the three
-      # together.
-      - name: Upload the decoder and its bridges
+      # The decoder is one file: the Dolby and DTS decoders are linked in (plan
+      # D10). The probe plays a file through MediaPlayer, for the soak test and
+      # the check that no bridge DLL is loaded.
+      - name: Upload the decoder and the probe
         uses: actions/upload-artifact@v7
         with:
           name: harletty-mf-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             harletty-bridge/target/release/harletty_mf.dll
-            harletty-bridge/target/release/harletty_dolby_bridge.dll
-            harletty-bridge/target/release/harletty_dts_bridge.dll
+            harletty-bridge/target/release/mf-player-probe.exe
           if-no-files-found: error
           retention-days: 30

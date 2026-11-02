@@ -65,12 +65,14 @@ check harletty-dolby-bridge "Dolby plugin" dca auro iamf-dec iamf-obu iamf-codec
 check harletty-dts-bridge "DTS plugin" truehd eac3 iamf-dec iamf-obu iamf-codecs "${cli[@]}"
 check harletty-iamf-bridge "IAMF plugin" truehd eac3 dca auro "${cli[@]}"
 
-# The Media Foundation decoder holds no decoder at all: the decoders are the
-# bridge DLLs, loaded from its own folder at run time (docs/plan-media-foundation-decoder.md, D3).
+# The Media Foundation decoder links the Dolby and DTS families (D10 in
+# docs/plan-media-foundation-decoder.md) and nothing else of the decoders: not
+# the IAMF family, not the plugin crates (their root-module exports would clash
+# with its own), not the offline CLI's crates.
 # It links Omniphony's engine, whose live_log crate pulls in env_logger; the DLL
 # never starts that logger (it installs its own file logger), so env_logger is
-# allowed here. The decoders and the offline CLI's crates are not.
-check harletty-mf-decoder "Media Foundation decoder" truehd eac3 dca auro iamf-dec iamf-obu iamf-codecs damf clap indicatif indicatif-log-bridge
+# allowed here until Omniphony makes it optional.
+check harletty-mf-decoder "Media Foundation decoder" bridge-family-iamf iamf-dec iamf-obu iamf-codecs harletty-dolby-bridge harletty-dts-bridge damf clap indicatif indicatif-log-bridge
 
 # The combined bridge (an rlib for the fuzz target, the bench and the kit).
 check harletty-bridge "combined bridge" "${cli[@]}"

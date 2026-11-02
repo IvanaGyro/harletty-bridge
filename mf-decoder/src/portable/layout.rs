@@ -187,7 +187,7 @@ mod tests {
             }
         );
         assert_eq!(plan(0x4).output_mask, STEREO); // mono output is given stereo
-        assert_eq!(plan(0).binaural, true);
+        assert!(plan(0).binaural);
         let five_one = plan(0x3F);
         assert_eq!(
             (

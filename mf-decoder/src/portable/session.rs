@@ -1,8 +1,8 @@
 //! One stream's decoder, as the transform drives it: compressed access units
 //! in, interleaved float blocks out, each placed on the timeline.
 //!
-//! The decoding is `orender_engine`'s: it loads the family's bridge DLL, which
-//! decodes the stream, and renders the result (objects included) to the speaker
+//! The decoding is `orender_engine`'s, over the Dolby and DTS families linked
+//! into this library (`assemble`): it decodes the stream and renders the result (objects included) to the speaker
 //! layout generated from the channel mask. Everything here is the adaptation:
 //! the layout file, the check that the engine's channels are the mask's in
 //! order, the timestamps, the errors.
@@ -25,11 +25,9 @@ pub struct Block {
     pub samples: Vec<f32>,
 }
 
-/// Where a session finds and puts its files.
+/// Where a session puts its files and finds its configuration.
 #[derive(Debug, Clone)]
 pub struct Setup {
-    /// The folder holding `harletty_dolby_bridge` / `harletty_dts_bridge`.
-    pub bridge_dir: PathBuf,
     /// Where the generated speaker layout is written.
     pub work_dir: PathBuf,
     /// An engine configuration (Omniphony's `config.yaml` schema), if any.
@@ -37,7 +35,9 @@ pub struct Setup {
     pub engine_config: Option<PathBuf>,
 }
 
-/// The file name of a family's bridge library on this platform.
+/// The file name of a family's bridge library on this platform: what the
+/// reference session loads (the decoders themselves are linked in).
+#[doc(hidden)]
 pub fn bridge_file_name(family: &str) -> String {
     if cfg!(windows) {
         format!("harletty_{family}_bridge.dll")
@@ -90,6 +90,46 @@ fn write_binaural_config(dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The user's engine configuration with binaural output switched on, written
+/// to `dir`: the output is too small to pan to (`layout::plan`), so whatever
+/// else the user configured, the engine must binauralise or the session cannot
+/// open. A file that does not parse is left to the engine, which falls back to
+/// its defaults (and says so in the log): binaural alone.
+fn write_binaural_over(user: &Path, dir: &Path) -> Result<PathBuf, String> {
+    use serde_yaml_ng::{Mapping, Value};
+    let mut root = std::fs::read_to_string(user)
+        .ok()
+        .and_then(|text| serde_yaml_ng::from_str::<Value>(&text).ok())
+        .filter(Value::is_mapping)
+        .unwrap_or_else(|| Value::Mapping(Mapping::new()));
+    fn section(parent: &mut Value, key: &str) -> Value {
+        let map = parent.as_mapping_mut().expect("a mapping");
+        map.remove(key)
+            .filter(Value::is_mapping)
+            .unwrap_or_else(|| Value::Mapping(Mapping::new()))
+    }
+    let mut render = section(&mut root, "render");
+    let mut binaural = section(&mut render, "binaural");
+    binaural
+        .as_mapping_mut()
+        .expect("a mapping")
+        .insert("output_mode".into(), "binaural".into());
+    render
+        .as_mapping_mut()
+        .expect("a mapping")
+        .insert("binaural".into(), binaural);
+    root.as_mapping_mut()
+        .expect("a mapping")
+        .insert("render".into(), render);
+    let yaml = serde_yaml_ng::to_string(&root).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join("engine-binaural-user.yaml");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(yaml.as_str()) {
+        std::fs::write(&path, yaml).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
+
 impl Session {
     /// Start a decoder for `codec` at `rate`, rendering to `mask`'s speakers.
     /// Slow (the engine builds its panning tables): done when the input type is
@@ -100,28 +140,64 @@ impl Session {
         mask: u32,
         setup: &Setup,
     ) -> Result<Self, String> {
-        let plan = layout::plan(mask);
-        let bridge = setup.bridge_dir.join(bridge_file_name(codec.bridge));
+        Self::start(codec, rate, mask, setup, |config, layout| {
+            super::assemble::engine(config, layout, codec.input_codec, rate)
+        })
+    }
+
+    /// The same session on `Engine::from_paths`, loading the family's bridge
+    /// DLL from `bridge_dir`: what [`open`](Self::open) must equal, for the
+    /// tests that compare them. Not used by the library.
+    #[doc(hidden)]
+    pub fn open_reference(
+        codec: &'static Codec,
+        rate: u32,
+        mask: u32,
+        setup: &Setup,
+        bridge_dir: &Path,
+    ) -> Result<Self, String> {
+        let bridge = bridge_dir.join(bridge_file_name(codec.bridge));
         if !bridge.is_file() {
             return Err(format!("{}: not found", bridge.display()));
         }
+        Self::start(codec, rate, mask, setup, |config, layout| {
+            Engine::from_paths(
+                config,
+                Some(layout),
+                std::slice::from_ref(&bridge),
+                Some(codec.input_codec),
+                rate,
+            )
+            .map_err(|e| format!("{e:#}"))
+        })
+    }
+
+    fn start(
+        codec: &'static Codec,
+        rate: u32,
+        mask: u32,
+        setup: &Setup,
+        make_engine: impl FnOnce(Option<&Path>, &Path) -> Result<Engine, String>,
+    ) -> Result<Self, String> {
+        let plan = layout::plan(mask);
         let layout_path = write_layout(&setup.work_dir, plan.render_mask)?;
-        // A configuration of the user's own is theirs; otherwise the one that
-        // binauralises, when the output is too small to pan to.
+        // A configuration of the user's own is theirs, but binaural output is
+        // not the user's to switch off when the output is too small to pan to.
         let engine_config = match (&setup.engine_config, plan.binaural) {
-            (Some(path), _) => Some(path.clone()),
+            (Some(path), true) => {
+                log::info!(
+                    "the output has two speakers or fewer: rendering binaurally, whatever \
+                     'render.binaural.output_mode' says in {}",
+                    path.display()
+                );
+                Some(write_binaural_over(path, &setup.work_dir)?)
+            }
+            (Some(path), false) => Some(path.clone()),
             (None, true) => Some(write_binaural_config(&setup.work_dir)?),
             (None, false) => None,
         };
         let started = std::time::Instant::now();
-        let engine = Engine::from_paths(
-            engine_config.as_deref(),
-            Some(&layout_path),
-            &[bridge],
-            Some(codec.input_codec),
-            rate,
-        )
-        .map_err(|e| format!("{e:#}"))?;
+        let engine = make_engine(engine_config.as_deref(), &layout_path)?;
         log::info!(
             "engine for {} ready in {:.0?} ({}, output mask 0x{:X})",
             codec.name,
@@ -175,6 +251,10 @@ impl Session {
     /// One compressed access unit (a Matroska block's payload). `pts_hns` is
     /// its sample time, if it had one.
     pub fn push(&mut self, data: &[u8], pts_hns: Option<i64>) -> Result<Vec<Block>, String> {
+        #[cfg(test)]
+        if test_hooks::PANIC_NEXT_PUSH.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("injected panic in Session::push");
+        }
         self.engine.set_input_pts(pts_hns.map(hns_to_us));
         let chunks = self
             .engine
@@ -224,4 +304,13 @@ impl Session {
         }
         Ok(blocks)
     }
+}
+
+/// Hooks for the unit tests only: not in the DLL that ships.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::sync::atomic::AtomicBool;
+
+    /// Makes the next `Session::push` panic.
+    pub static PANIC_NEXT_PUSH: AtomicBool = AtomicBool::new(false);
 }
