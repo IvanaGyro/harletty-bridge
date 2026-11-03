@@ -6,6 +6,11 @@ $ErrorActionPreference = 'Stop'
 
 $clsid = '{AC884ED4-9379-4E5A-BAF6-3365A4F08E38}'
 $classes = 'HKLM:\SOFTWARE\Classes'
+# Where MFTRegister keeps the registration (and its category entry).
+$mfKeys = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows Media Foundation\Transforms\$clsid",
+    "HKLM:\SOFTWARE\Microsoft\Windows Media Foundation\Transforms\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$clsid"
+)
 $installDir = Join-Path $env:ProgramFiles 'harletty\mf'
 $work = Join-Path ([IO.Path]::GetTempPath()) "harletty-mf-install-$PID"
 Expand-Archive -Path $Zip -DestinationPath $work
@@ -28,6 +33,7 @@ foreach ($name in 'mf.yaml', 'mf-config.yaml', 'uninstall.ps1', 'common.ps1', 'l
 Check ((Get-Content (Join-Path $installDir 'mf.yaml')) -contains 'codecs: [truehd, dts, eac3, ac3]') '-WithDolbyDigital wrote the codec list'
 Check (Test-Path "$classes\CLSID\$clsid\InprocServer32") 'the COM class is registered'
 Check (Test-MftListed) 'Media Foundation lists the decoder'
+foreach ($key in $mfKeys) { Check (Test-Path $key) "registry key exists: $key" }
 
 # A second run keeps the user's edits to the option files and still works.
 Add-Content (Join-Path $installDir 'mf.yaml') '# user edit'
@@ -64,6 +70,7 @@ Set-Content (Join-Path $user 'harletty-mf.log') 'x'
 Check (-not (Test-Path $installDir)) 'the install folder is gone'
 Check (-not (Test-Path (Split-Path $installDir))) 'the harletty folder in Program Files is gone too'
 Check (-not (Test-Path "$classes\CLSID\$clsid")) 'the COM class is gone'
+foreach ($key in $mfKeys) { Check (-not (Test-Path $key)) "registry key is gone: $key" }
 Check (-not (Test-MftListed)) 'Media Foundation no longer lists the decoder'
 Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is kept without -Purge'
 
