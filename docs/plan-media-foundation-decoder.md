@@ -488,6 +488,8 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
       today, and no downmix matrix under D11.
     - Measured with the WinRT `MediaPlayer` only. WMP Legacy has to accept an
       8-channel type on a stereo endpoint too (Phase 6 step 0).
+    - If test 3′ prefers the engine's 12-channel render, stereo endpoints
+      get `0x2D63F` instead.
     - `speaker_mask` still overrides it.
 - **D5. A config of its own, in two places.** The defaults are
   `mf-config.yaml`, next to the DLL, written by the installer. A per-user
@@ -1401,12 +1403,28 @@ judgements, and only the identification test was blind.
      second listener, would make it firmer and is welcome.
 2. **Heights: answered in part.** The WinRT `MediaPlayer` accepts and plays
    a 12-channel type on a stereo endpoint (F6).
-   - Height channels on height speakers: **not measured.** The owner's
-     impression of tops "from above" on headphones was corrected by the owner
-     and is not evidence.
-   - **Decision:** not blocking. D11 ships with no height output. The small
-     panner stays the route if someone with a 7.1.4 PCM endpoint shows heights
-     reaching speakers.
+   - Height channels on height speakers: **not measured.** There were none.
+   - **On headphones the owner hears height differences.**
+     - The blind test bears out that something differs: with presentation 3,
+       the 7.1.4 and 7.1 renders were told apart 6 times in 6.
+     - What is unknown is how that difference reaches the ears.
+     - The headphones are Google Pixel Buds A-Series. The owner says they
+       support spatial audio, but Google's help page says Spatial Audio "is
+       not compatible with Pixel Buds A-Series"
+       (<https://support.google.com/googlepixelbuds/answer/12921041>).
+     - The Windows Spatial audio setting made no audible difference.
+     - *Inferred:* the buds play the two channels Windows downmixes to, with
+       no processing of their own. The 12-channel render then differs from
+       the 7.1 one only in how the engine's top-layer signal folds into that
+       stereo. The owner may hear that as height, but no elevation cue is
+       added.
+   - **Decision:**
+     - This is not evidence that heights reach height speakers, so for
+       loudspeakers measurement 2 stays open and not blocking. D11 ships with
+       no height output, and the small panner stays the route if someone with
+       a 7.1.4 PCM endpoint shows heights reaching speakers.
+     - It is a reason to test the 12-channel render on headphones as a
+       preference. That is why 3′ includes it.
 3. **Listening: answered in part.**
    - **Blind:**
      - presentation 2 and the engine's render of presentation 3 were told
@@ -1433,26 +1451,55 @@ judgements, and only the identification test was blind.
 **Still to measure:**
 
 - **3′. Blind, level-matched preference, TrueHD Atmos** (blocks removing the
-  engine for TrueHD Atmos):
-  - Both conditions come from today's MFT at `speaker_mask: 0x63F`:
-    presentation 2, and presentation 3 rendered by the engine, chosen by
-    `render.presentation` in `mf-config.yaml`.
-  - The owner's headphones; the two passages already used (315 s and 555 s of
-    the Atmos file).
-  - **Level matching:**
-    - Decode each passage under both conditions through the portable session
-      (`Session::open`, any machine).
-    - Take the level difference of the 8-channel output summed in power.
-    - Set `render.master_gain` (dB) on the louder condition's
-      `mf-config.yaml` so the two match within 0.5 dB.
-  - **Trials:** 12 in total, 6 per passage. In each, A and B are the two
-    conditions in random order, and the owner names the one they prefer. The
-    log line of step 0 confirms the presentation of every trial.
-  - **Keeps object rendering for TrueHD Atmos:** presentation 3 is preferred
-    in 10 or more of 12 trials. That has a one-sided p of about 0.02 against
-    no preference.
+  engine for TrueHD Atmos).
+  - **Conditions**, all from today's MFT on the owner's headphones:
+    - **R**, the reference: presentation 2 at `speaker_mask: 0x63F`. That is
+      D11's output.
+    - **A:** presentation 3, engine-rendered, at `0x63F`.
+    - **B:** presentation 3, engine-rendered, at `0x2D63F` (12 channels).
+  - **Settings:**
+    - `speaker_mask` goes in `mf.yaml`.
+    - `render.presentation` (`2` or `3`) and `render.master_gain` (dB) go in
+      `mf-config.yaml`.
+    - Use the copies in `%LOCALAPPDATA%\harletty\mf\`. `mf.yaml` there wins
+      key by key. `mf-config.yaml` there replaces the one next to the DLL
+      whole, so it must hold every key the condition needs.
+    - Each new decoder instance reads both files anew (`Decoder::new`,
+      `SetInputType`). *Inferred:* each playback in the probe builds a new
+      topology, and so a new decoder; check it in the log.
+  - **Passages:** the two already used, 315 s and 555 s of the Atmos file,
+    about 10 s each.
+  - **Level matching** on what reaches the headphones:
+    - Capture each condition's passage from the endpoint with a WASAPI
+      loopback recording, which records the stereo after Windows' downmix.
+    - Set `render.master_gain` on A and B so their RMS over the passage is
+      within 0.5 dB of R's. R stays at 0.
+    - A power sum of the decoder's own output is no substitute: the 12-channel
+      condition reaches the ears through Windows' downmix matrix, which is not
+      known.
+  - **Trials:** two blind pair tests, R against A and R against B, each of 12
+    trials, 6 per passage.
+    - In each trial the pair is played in random order and the owner names
+      the one preferred. The pairs, trials and orders are shuffled together.
+    - Record per trial: the condition files used, the order played, the
+      answer, and the decoder log's channel count.
+    - Also record the presentation. Until step 0 logs it, two settings are
+      needed to see the Dolby family's Debug line "presentation set to":
+      - `log_level: debug` in `mf.yaml`;
+      - `HARLETTY_LOG=debug` in the environment of the player process. The
+        families filter at their own level, Info unless that variable is set
+        (`bridge-common/src/logging.rs`).
+      - *Verify* that the line then reaches the MFT's log.
+      - Otherwise rely on the condition's file alone. Presentation 2 and 3
+        both give 8 channels at `0x63F`, so the channel count does not tell
+        them apart.
+  - **Keeps object rendering for TrueHD Atmos:** A or B is preferred over R in
+    10 or more of 12 trials. That has a one-sided p of about 0.02 against no
+    preference.
     - Object rendering is then the engine, or the small panner if it is found
       at least as good in the same test.
+    - If it is B, stereo endpoints get the 12-channel output (D4) rather than
+      7.1.
     - Any other result: D11 as written.
 - **5. DTS:X**, when a sample is at hand. It does not block (see after the
   steps):
@@ -1583,7 +1630,7 @@ Done when:
 | install / uninstall from the release zip | Windows desktop (clean VM) | 4 |
 | D11 gate: headphone virtualisation, heights, A/B, 5.1-core Atmos (first run: headphones, WinRT player; see "Gate results") | Windows desktop | 6 |
 | stereo endpoints get 7.1, binaural only on request; WMP accepts it; presentation logged | Linux + Windows CI, Windows desktop | 6 (step 0) |
-| blind level-matched preference, TrueHD presentation 2 against the engine's presentation 3 (3′) | Windows desktop | 6 |
+| blind level-matched preference, TrueHD presentation 2 against the engine's presentation 3 at 7.1 and at 7.1.4 (3′) | Windows desktop | 6 |
 | without `atmos`, presentation 3 is never decoded; 5.1-core Atmos gives 6 channels | Linux + Windows CI | 6 |
 | DTS:X: preference and bed energy (5) | Windows desktop + Linux, when a sample is at hand | 6 |
 | bridge and CLI output and feature resolution unchanged (release scope) | Linux CI + local corpus (`tools/host-baseline`) | 6 |

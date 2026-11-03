@@ -123,6 +123,20 @@ Nothing was measured with an instrument, and no loudspeakers were used.
    above differs between this decoder and mpv.
    - The owner recalls that mpv cannot decode Atmos and plays the fallback.
      That is not checked.
+   - The owner does hear height differences.
+   - The headphones are Google Pixel Buds A-Series, which the owner says
+     support spatial audio.
+   - **Checked against Google's help page**
+     (<https://support.google.com/googlepixelbuds/answer/12921041>): Spatial
+     Audio "is not compatible with Pixel Buds A-Series". It is a Pixel Buds
+     Pro / Pro 2 feature with Pixel phones; the page does not mention
+     Windows.
+   - **Inferred, not measured:** over Bluetooth from Windows the buds receive
+     the two channels Windows has downmixed to, with no spatial processing of
+     their own. Whatever differs between the 7.1 and 7.1.4 renders reaches
+     the ears through that stereo mix, not as height reproduction.
+   - The difference itself is real: the blind test below told the two masks
+     apart 6 times in 6 with presentation 3.
 4. **Blind identification**, 12 trials, 3 per condition, shuffled:
    - The conditions were TrueHD presentation 2 or 3 (`render.presentation`
      in `mf-config.yaml`) × mask `0x63F` or `0x2D63F`, on a 5 s passage. The
@@ -162,6 +176,10 @@ Nothing was measured with an instrument, and no loudspeakers were used.
 - **Consistent with F15:** presentation 2 sounds the same at either mask
   (2 of 6 is chance), because its 8 channels reach the 7.1.4 layout unchanged
   and the tops stay silent.
+- **Measured, blind:** the engine's 7.1.4 render of presentation 3 sounds
+  different from its 7.1 render, even downmixed to stereo.
+  - Whether the owner prefers it is not measured. That is why the plan's
+    test 3′ includes it.
 
 ## Open (desktop)
 
