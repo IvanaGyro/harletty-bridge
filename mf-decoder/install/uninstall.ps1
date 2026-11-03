@@ -31,12 +31,17 @@ if (Test-Path $target) {
 } else {
     # The file is gone but the registration may not be: remove the keys.
     Write-Host "$target is not there; removing the registration only."
-    $mf = 'HKLM:\SOFTWARE\Microsoft\Windows Media Foundation\Transforms'
-    foreach ($key in "HKLM:\SOFTWARE\Classes\CLSID\$($script:Clsid)", "$mf\$($script:Clsid)",
-            "$mf\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$($script:Clsid)") {
+    $guid = $script:Clsid.Trim('{}').ToLower()
+    $mf = 'HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms'
+    foreach ($key in "HKLM:\SOFTWARE\Classes\CLSID\$($script:Clsid)", "$mf\$guid",
+            "$mf\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$guid") {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $key
     }
 }
+
+# A decoder built before this was fixed leaves its category entry behind.
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+    "HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$($script:Clsid.Trim('{}').ToLower())"
 
 if (Test-MftListed) {
     throw 'The decoder is still listed by Media Foundation after unregistering.'
