@@ -151,7 +151,9 @@ mod windows_main {
         };
         let (start_at, play_for) = (
             number("--start", 0),
-            args.iter().any(|a| a == "--for").then(|| number("--for", 0)),
+            args.iter()
+                .any(|a| a == "--for")
+                .then(|| number("--for", 0)),
         );
         let (soak, seek_every, report_every) = (
             number("--soak", 0),
