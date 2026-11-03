@@ -11,7 +11,8 @@
   Where it was installed. Default: %ProgramFiles%\harletty\mf.
 
 .PARAMETER Purge
-  Also delete %LOCALAPPDATA%\harletty\mf of the user running this.
+  Also delete %LOCALAPPDATA%\harletty\mf of the user running this (and
+  %LOCALAPPDATA%\harletty if that leaves it empty).
 #>
 [CmdletBinding()]
 param(
@@ -72,6 +73,8 @@ if (Test-Path $InstallDir) {
 if ($Purge) {
     $user = Join-Path $env:LOCALAPPDATA 'harletty\mf'
     if (Test-Path $user) { Remove-Item -Recurse -Force $user; Write-Host "Deleted $user" }
+    $userParent = Split-Path $user
+    if ((Test-Path $userParent) -and -not (Get-ChildItem $userParent -Force)) { Remove-Item $userParent }
 }
 
 Write-Host 'The decoder is unregistered and its files are deleted.'

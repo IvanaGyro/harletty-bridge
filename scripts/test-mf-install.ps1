@@ -62,6 +62,7 @@ New-Item -ItemType Directory -Force $user | Out-Null
 Set-Content (Join-Path $user 'harletty-mf.log') 'x'
 & (Join-Path $installDir 'uninstall.ps1')
 Check (-not (Test-Path $installDir)) 'the install folder is gone'
+Check (-not (Test-Path (Split-Path $installDir))) 'the harletty folder in Program Files is gone too'
 Check (-not (Test-Path "$classes\CLSID\$clsid")) 'the COM class is gone'
 Check (-not (Test-MftListed)) 'Media Foundation no longer lists the decoder'
 Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is kept without -Purge'
@@ -72,6 +73,7 @@ Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is ke
 Check (-not (Test-Path $installDir)) 'install.ps1 -Uninstall: the install folder is gone'
 Check (-not (Test-MftListed)) 'install.ps1 -Uninstall: Media Foundation no longer lists the decoder'
 Check (-not (Test-Path $user)) '-Purge deleted the per-user folder'
+Check (-not (Test-Path (Split-Path $user))) '-Purge deleted the empty harletty folder under LocalAppData'
 
 Remove-Item -Recurse -Force $work
 Write-Host 'install / uninstall round trip passed'
