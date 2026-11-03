@@ -91,6 +91,78 @@ a TrueHD 7.1 MKV:
   hundredth after, every `ProcessMessage`, and the accepted output type, to
   find where it stops.
 
+## Phase 6 gate, measured on a desktop (owner's listening, one listener)
+
+**Setup:**
+- a Windows ARM64 laptop, two-channel headphones;
+- the WinRT `MediaPlayer` through `mf-player-probe`;
+- the MFT as Phase 4 ships it, with the engine.
+
+The headphone endpoint's Spatial audio setting was tried at each of its three
+values: "Off", "Windows Sonic for Headphones" and "Dolby Atmos for
+Headphones". What follows is the owner's report and the decoder's log.
+Nothing was measured with an instrument, and no loudspeakers were used.
+
+1. **No pinned mask.**
+   - In all four runs, at all three Spatial audio settings, the log shows
+     `output: 2 channels, mask 0x3` and "rendering binaurally".
+   - So the endpoint's shared-mode mix format stayed stereo with Windows
+     Sonic for Headphones and Dolby Atmos for Headphones on.
+   - The owner judged that binaural sound worse than mpv's. The file had no
+     Atmos presentation.
+2. **`speaker_mask` pinned to `0x63F` (8 channels) or `0x2D63F` (12).**
+   - The player accepted the type and played in every run. The sound was
+     "much better", "very similar to mpv".
+   - On a non-Atmos file (two masks × the three settings, start of the file),
+     the six runs sounded very similar to each other. Front, side and back
+     could not be told apart.
+   - On a Dolby Atmos TrueHD file (passages at 315 s and 555 s), the Spatial
+     audio setting made no audible difference.
+3. **Heights.** The owner first reported that with 12 channels the four top
+   sounds came from above, then corrected it: where they sit in the plane
+   above differs between this decoder and mpv.
+   - The owner recalls that mpv cannot decode Atmos and plays the fallback.
+     That is not checked.
+4. **Blind identification**, 12 trials, 3 per condition, shuffled:
+   - The conditions were TrueHD presentation 2 or 3 (`render.presentation`
+     in `mf-config.yaml`) × mask `0x63F` or `0x2D63F`, on a 5 s passage. The
+     owner named the condition.
+   - The log confirmed the channel count of every trial. It has no line for
+     the presentation decoded.
+   - **Results:**
+     - presentation right in 12 of 12;
+     - mask right in 6 of 6 with presentation 3, and in 2 of 6 with
+       presentation 2;
+     - exact condition right in 8 of 12.
+   - **Per trial:**
+     - T1, T3 and T11 (p3/7.1.4) were right; T5, T6 and T7 (p3/7.1) were
+       right.
+     - T2 and T4 (p2/7.1.4) were answered p2/7.1; T8 (p2/7.1.4) was right.
+     - T9 and T10 (p2/7.1) were answered p2/7.1.4; T12 (p2/7.1) was right.
+5. **Not blind, one passage.**
+   - Presentation 3 at the 7.1 mask was "so loud" next to presentation 2,
+     and seemed closer and toward the top centre ("the sound is front right
+     top").
+   - Earlier, the owner judged the engine's 7.1 render of presentation 3
+     worse than mpv's 7.1.
+   - No blind preference between presentations 2 and 3 has been measured.
+6. **Not tested:**
+   - a 5.1-core Atmos TrueHD stream (gate measurement 4: no sample);
+   - DTS:X;
+   - a 5.1 or 7.1 loudspeaker system;
+   - WMP Legacy;
+   - any other device.
+
+**What follows from it**, as the plan reads it (Phase 6, "Gate results"):
+- **Inferred:** Windows downmixes an 8- or 12-channel Media Foundation stream
+  to stereo here, at all three Spatial audio settings, and does not
+  virtualise it. F16 is not confirmed on this machine.
+- **Measured, for this listener:** the engine's binaural stage loses to that
+  downmix. That comparison was not blind.
+- **Consistent with F15:** presentation 2 sounds the same at either mask
+  (2 of 6 is chance), because its 8 channels reach the 7.1.4 layout unchanged
+  and the tops stay silent.
+
 ## Open (desktop)
 
 - Whether WMP Legacy, FluentFin (direct play) and the Media Player app load

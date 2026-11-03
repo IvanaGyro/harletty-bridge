@@ -106,12 +106,15 @@ engine behind `liborender` that mpv-omniphony uses. The MFT only adapts
 Media Foundation's sample flow to that engine. It is the Media Foundation
 counterpart of mpv's `ad_orender`.
 
-That is the design Phases 1–4 built. **D11 proposes a direction away from
-it:** an MFT that renders as little as possible.
-- It plays each stream's own channel presentation and leaves headphone
-  virtualisation to Windows, without `orender_engine`.
-- It is a direction, not a decision. Phase 6 measures four things on Windows
-  first, and its gate says which results keep the engine.
+That is the design Phases 1–4 built. **D11 takes a direction away from it:**
+an MFT that renders as little as possible.
+- It plays each stream's own channel presentation, as a 7.1-or-larger stream
+  even to stereo headphones, without `orender_engine`.
+- Phase 6's gate has been run once, on headphones
+  (`docs/media-foundation-findings.md`). That run decided the direction and
+  the headphone output.
+- Before the engine is removed for TrueHD Atmos, one blind, level-matched
+  preference test is still missing ("Gate results").
 
 Whether Windows' built-in WinRT player can load the same DLL is an open
 question, and Phase 0 answers it (step 4) before anything is built on it. That
@@ -234,6 +237,11 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
       (<https://learn.microsoft.com/en-us/windows/win32/coreaudio/spatial-sound>),
       and a decoder MFT owns none.
     - *Verify* in Phase 6, gate measurement 2.
+    - **Measured (owner, Windows ARM64, headphones):** the WinRT
+      `MediaPlayer` accepts and plays an 8-channel (`0x63F`) and a 12-channel
+      (`0x2D63F`) float type on a stereo endpoint, and Windows downmixes them.
+      Whether `SPEAKER_TOP_*` channels come out of height speakers is still
+      not measured: there were no speakers.
 - **F7. `orender_engine` can be embedded as a Rust crate.** The `orender` CLI
   embeds it this way; `liborender` (`orender_ffi`) is a thin C shim over it.
   The entry points are in
@@ -398,6 +406,15 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     (`com/endpoint.rs`), already gets 7.1 there. The engine's binaural stage
     then never runs.
   - *Verify*: Phase 6, gate measurement 1.
+  - **Not confirmed on the one machine measured** (owner, Windows ARM64,
+    two-channel headphones, WinRT `MediaPlayer`; details in
+    `docs/media-foundation-findings.md`):
+    - the mix format stayed stereo at every Spatial audio setting ("Off",
+      "Windows Sonic for Headphones", "Dolby Atmos for Headphones");
+    - with the output pinned to 8 or 12 channels, the three settings sounded
+      alike, and front, side and back could not be told apart.
+    - *Inferred:* Windows only downmixes such a stream to stereo here. Do not
+      rely on Windows to virtualise the MFT's output.
 
 ## Design decisions
 
@@ -429,6 +446,13 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     the streams' own presentations instead.
   - D2 stands until Phase 6's gate decides. If the gate keeps the engine, D2
     stays as written.
+  - **After the first gate run:** the engine's binaural stage was its one
+    contribution that nothing small replaces. For the owner it lost to a
+    plain downmix (F16, "Gate results"), so it is no longer a reason to keep
+    the engine.
+  - What still decides D2 for TrueHD Atmos is the blind preference test
+    between presentation 2 and the engine's render of presentation 3
+    ("Gate results", measurement 3′).
 - **D3. Until Phase 3, the decoders are the bridge DLLs, loaded from the
   MFT's own folder.** This is a stage on the way to D10, not what ships:
   Phases 1 and 2 are built and tested this way, and Phase 3 step 1 links the
@@ -456,6 +480,15 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   - Under D11 the YAML goes: there is no engine to read it. The mask and its
     labels, in the same bit order, become the routing table the decoder
     mixes into.
+  - **An endpoint of one or two speakers gets 7.1 (`0x63F`), not stereo**
+    (Phase 6 step 0, with or without D11). Windows downmixes it.
+    - This is the output the owner heard as "much better" than the forced
+      binaural one.
+    - It means the MFT needs no stereo path of its own: no forced binaural
+      today, and no downmix matrix under D11.
+    - Measured with the WinRT `MediaPlayer` only. WMP Legacy has to accept an
+      8-channel type on a stereo endpoint too (Phase 6 step 0).
+    - `speaker_mask` still overrides it.
 - **D5. A config of its own, in two places.** The defaults are
   `mf-config.yaml`, next to the DLL, written by the installer. A per-user
   override is `%LOCALAPPDATA%\harletty\mf\config.yaml`, if present, and wins.
@@ -470,13 +503,16 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     (`render.binaural.output_mode: binaural`,
     `../Omniphony/omniphony-renderer/BINAURAL.md`) and works with a stereo
     mask.
+    - From Phase 6 step 0 it is only used when that file asks for it, not
+      forced on stereo endpoints (D4).
   - **Under D11:**
     - `mf-config.yaml` and its Omniphony schema go, and with them the F9
       caution.
     - The options the MFT keeps move into `mf.yaml`: `drc` (the bridge's
       DRC mode) and optionally `presentation`.
-    - Binaural leaves the MFT. Headphones get Windows' virtualisation (F16)
-      or, without it, a stereo presentation or downmix.
+    - Binaural leaves the MFT. Headphones get the 7.1 output, downmixed by
+      Windows (D4). F16 shows Windows does not virtualise it on the one
+      machine measured.
 - **D6. Codecs registered:** TrueHD and DTS by default. E-AC-3 and AC-3 only
   when the installer is asked (`-WithDolbyDigital`), and only once Phase 0 has
   shown what WMP does when Microsoft's decoder is also registered (F5).
@@ -572,8 +608,9 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
       decoder crates directly, as the Apache-2.0 CLI does. That is not
       planned.
 - **D11. Direction: decode the stream's own presentation, render (almost)
-  nothing, leave headphones to Windows.** *Proposed, gated by Phase 6; not
-  decided.*
+  nothing, give headphones the 7.1 output.** *The direction is decided
+  after the first gate run ("Gate results"). The engine is removed only if
+  the blind preference test 3′ does not prefer its TrueHD Atmos render.*
   - **Why:**
     - On the speaker layouts Windows gives a PCM endpoint (≤ 7.1 in
       practice, *inferred*; F6), every Atmos object ends up folded into
@@ -584,11 +621,24 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     - What the engine costs inside every Media Foundation process (size,
       crates, threads, a large pin to track) then buys object panning that
       the stream already carries rendered, plus the binaural stage.
-  - **Per codec, with the output mask from D4:**
-    - **TrueHD:** `presentation` = 0 for one or two speakers, 1 for 3–6, 2
-      for more. The `truehd` fallback picks a smaller presentation the
-      stream has (F14; a 5.1-core Atmos stream is in gate measurement 4).
+    - For the one listener so far, the binaural stage lost to a plain
+      downmix of the 7.1 output (F16, "Gate results").
+  - **Per codec, with the output mask from D4** (stereo endpoints get
+    `0x63F`):
+    - **TrueHD:** `presentation` = 1 for masks of 3–6 speakers, 2 for more.
       No objects are decoded.
+      - The family built without `atmos` never decodes presentation 3. When
+        the presentation asked for is missing, it takes the highest of 0–2
+        the stream has.
+      - The `truehd` crate's own fallback for a missing presentation can
+        pick the object presentation (`max_independent_presentation`).
+        Without `atmos` the family checks the presentation map, so a
+        5.1-core Atmos stream gives its 6 channels whatever that fallback
+        does.
+      - That makes gate measurement 4 a test of this code (Phase 6 step 4),
+        not an assumption.
+      - Presentation 0 (the stream's own stereo) is used only if check 6
+        prefers it to Windows' downmix of presentation 2.
     - **DTS, DTS-HD, DTS:X, Auro-3D over DTS-HD:** the family built without
       its DTS:X and Auro features ("Build contents") gives the lossless
       backward-compatible bed. The encoder folded the heights and objects
@@ -602,7 +652,8 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
       position across its nearest speakers, power preserving.
 
     That is a fixed table worked out once per label set, not a renderer.
-    Stereo and mono masks are given stereo, not binaural.
+    Stereo and mono endpoints get the 7.1 mask (D4), so the table never mixes
+    to fewer than eight channels.
   - **What stays from the engine path, ported to the session:**
     - DRC: the bridge's `drc_gain` and ramp, applied as
       `orender_engine::render::fill_pcm_f32_drc` does, about 30 lines. It is
@@ -610,11 +661,12 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     - Timestamps: the first block of a push carries that push's time. The
       latency is 0. `Block`, `OutputClock` and the transform do not change.
   - **What is lost:**
-    - HRTF binaural inside the MFT. If F16 holds, Windows' virtualisation
-      takes its place. If it does not, headphones get a plain stereo
-      presentation.
+    - HRTF binaural inside the MFT.
+      - Windows does not virtualise in its place on the one machine measured
+        (F16). Headphones get Windows' plain downmix of the 7.1 output.
+      - The owner preferred that downmix, unblinded, to the binaural stage.
     - Height speakers get nothing. Gate measurement 2 says whether they
-      could at all.
+      could at all; it is still open, for want of speakers.
     - Object panning, which only matters if a layout bigger than the
       stream's channel presentation can reach the speakers.
     - Engine parity with mpv-omniphony.
@@ -625,8 +677,9 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     - *An object renderer of our own:* a dual-balance Cartesian panner of a
       few hundred lines came out about as close to Dolby's fold as the engine
       on one short clip (F15). It is the fallback only if the gate shows
-      height speakers reachable, or a DTS:X fold the bed cannot give. It
-      would be its own Cargo feature of the MFT, off unless that holds.
+      height speakers reachable, or a DTS:X fold the bed cannot give, or if
+      test 3′ prefers object rendering. It would be its own Cargo feature of
+      the MFT, off unless that holds.
   - **Build contents** (Phase 6 settles the exact feature names). The MFT
     depends on the shared crates with `default-features = false` and enables:
     - in `bridge-common`, no feature;
@@ -679,6 +732,7 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
       confirms it (Phase 6 step 3).
   - **Gate:** Phase 6. Each measurement says which result keeps the engine
     (D2 as written). D11 replaces D2 only if none of them does.
+    - What the first run settled and what it left open is in "Gate results".
 
 Fixed identifiers, so every phase and every machine agree:
 
@@ -718,7 +772,7 @@ Under D11, if Phase 6's gate lets it in, the middle becomes:
                                      ├─ bridge-family-dts   [no dtsx, no auro]  lossless bed
                                      └─ label → mask routing (fixed table), DRC ramp
                          │
-                         ▼  float32 PCM, mask = endpoint's (headphones: Windows virtualises, F16)
+                         ▼  float32 PCM, mask = endpoint's (stereo endpoints: 0x63F, Windows downmixes; D4)
 ```
 
 ### The MFT contract (what `com/transform.rs` implements)
@@ -1280,7 +1334,8 @@ zips and the clean-machine check passes.
 ### Phase 6: a decoder without the renderer (D11), behind a gate
 
 Phase 6 does not wait for Phase 5's items. It changes nothing until its gate
-holds.
+holds, with one exception: step 0, which the first gate run justified on its
+own.
 
 **Gate.** Four **(Windows desktop)** measurements, made with the MFT as it
 ships today (Phase 4) and recorded in `docs/media-foundation-findings.md`.
@@ -1326,7 +1381,121 @@ rejected. Only if none does do the steps below start.
    - If it fails, the Dolby family needs a feature exposing the presentation
      map, and the MFT selects from it.
 
+**Gate results (first run).** The owner ran these on a Windows ARM64 laptop
+with two-channel headphones and the WinRT `MediaPlayer`. There were no
+loudspeakers, no WMP and no DTS:X. The reports are in
+`docs/media-foundation-findings.md` ("Phase 6 gate"). They are one listener's
+judgements, and only the identification test was blind.
+
+1. **Headphones: answered.** The mix format stayed stereo at all three Spatial
+   audio settings ("Off", "Windows Sonic for Headphones", "Dolby Atmos for
+   Headphones"). Pinned 8- and 12-channel outputs sounded alike at all three.
+   - *Inferred:* Windows downmixes and does not virtualise (F16).
+   - Read literally, the keep-condition above holds. Its reason does not: it
+     assumed the binaural stage beats a plain downmix. The owner heard the
+     forced binaural output as worse than Windows' plain downmix of the 7.1
+     output, run after run. That comparison was unblinded.
+   - **Decision:** binaural does not keep the engine. Stereo endpoints get
+     the 7.1 output now (step 0) and under D11.
+   - This needs no further measurement to proceed. A blind repeat, or a
+     second listener, would make it firmer and is welcome.
+2. **Heights: answered in part.** The WinRT `MediaPlayer` accepts and plays
+   a 12-channel type on a stereo endpoint (F6).
+   - Height channels on height speakers: **not measured.** The owner's
+     impression of tops "from above" on headphones was corrected by the owner
+     and is not evidence.
+   - **Decision:** not blocking. D11 ships with no height output. The small
+     panner stays the route if someone with a 7.1.4 PCM endpoint shows heights
+     reaching speakers.
+3. **Listening: answered in part.**
+   - **Blind:**
+     - presentation 2 and the engine's render of presentation 3 were told
+       apart in 12 of 12 trials;
+     - with presentation 3, the 7.1 and 7.1.4 masks were told apart in 6 of
+       6, so the engine renders them audibly differently even after Windows'
+       downmix;
+     - with presentation 2 the masks were not told apart (2 of 6, chance).
+       That is consistent with F15: its 8 channels reach either layout
+       unchanged.
+   - **Unblinded:** the owner leaned to presentation 2. The engine's 7.1
+     render of presentation 3 was "so loud", closer and toward the top
+     centre, and earlier judged worse than mpv's 7.1, which the owner recalls
+     plays the non-Atmos fallback (unchecked).
+   - **No blind preference has been measured,** and the level difference may
+     have told the conditions apart on its own. So this decides nothing yet
+     for TrueHD Atmos; see 3′.
+   - DTS:X and loudspeakers were not tested; see 5.
+4. **5.1-core Atmos: not tested, no sample.** The owner suggested assuming it
+   works. The plan does not: without `atmos`, the Dolby family reads the
+   presentation map and never decodes presentation 3 (D11). Step 4 tests it on
+   a sample once one is found.
+
+**Still to measure:**
+
+- **3′. Blind, level-matched preference, TrueHD Atmos** (blocks removing the
+  engine for TrueHD Atmos):
+  - Both conditions come from today's MFT at `speaker_mask: 0x63F`:
+    presentation 2, and presentation 3 rendered by the engine, chosen by
+    `render.presentation` in `mf-config.yaml`.
+  - The owner's headphones; the two passages already used (315 s and 555 s of
+    the Atmos file).
+  - **Level matching:**
+    - Decode each passage under both conditions through the portable session
+      (`Session::open`, any machine).
+    - Take the level difference of the 8-channel output summed in power.
+    - Set `render.master_gain` (dB) on the louder condition's
+      `mf-config.yaml` so the two match within 0.5 dB.
+  - **Trials:** 12 in total, 6 per passage. In each, A and B are the two
+    conditions in random order, and the owner names the one they prefer. The
+    log line of step 0 confirms the presentation of every trial.
+  - **Keeps object rendering for TrueHD Atmos:** presentation 3 is preferred
+    in 10 or more of 12 trials. That has a one-sided p of about 0.02 against
+    no preference.
+    - Object rendering is then the engine, or the small panner if it is found
+      at least as good in the same test.
+    - Any other result: D11 as written.
+- **5. DTS:X**, when a sample is at hand. It does not block (see after the
+  steps):
+  - A DTS:X title, the same test as 3′: the engine's render of the DTS:X
+    presentation at 7.1, against the lossless bed.
+  - Until step 2 exists, the bed comes from FFmpeg's DCA decoder; *verify*
+    that it ignores the extension.
+  - **On Linux, with the same sample:** the bed has the energy of the bed plus
+    the extension feeds, within 0.5 dB, which checks that the encoder folded
+    them in.
+  - **Brings back object rendering for DTS:X** (the small panner, an MFT
+    feature): the engine is preferred in 10 or more of 12 trials, or the bed
+    falls short of that energy.
+- **6. Optional, after step 3:** TrueHD presentation 0 (the stream's stereo)
+  against Windows' downmix of presentation 2, on headphones, blind.
+  - If presentation 0 is preferred in 10 or more of 12, stereo endpoints get
+    a stereo type with presentation 0 for TrueHD.
+  - DTS keeps the 7.1 output, since it has no stereo of its own.
+- **Loudspeakers, whenever a 5.1 or 7.1 system is at hand:** step 6's desktop
+  check. On beds, D11's output equals today's engine output after its fade-in
+  (F15, verified on Linux), so this is a regression check, not a gate.
+
 **Steps**, after the gate:
+
+0. **Now, with the engine still in** (D4; it stands whatever 3′ and 5 give):
+   - `layout::plan`: an endpoint of two speakers or fewer gets `0x63F` for
+     output and render, not forced binaural. The binaural stage runs only when
+     `mf-config.yaml` sets `render.binaural.output_mode: binaural`, and then
+     as today.
+   - The session logs the decoded presentation (`Engine::source_label`,
+     `bed_labels`) at the start and whenever it changes. The identification
+     test had no such line.
+   - Tests: `plan` for stereo and mono masks; a session at mask `0x3`
+     returns 8 channels.
+   - `docs/media-foundation.md`, "Speakers": stereo devices get 7.1 and
+     Windows downmixes it; binaural is an option.
+   - **(Windows desktop)** Two checks:
+     - WMP Legacy accepts the 8-channel type on a stereo endpoint and plays
+       it.
+     - The WinRT `MediaPlayer` result is repeated with the new DLL.
+     - If WMP refuses, the transform also offers a stereo type, second (index
+       1): binaural while the engine is in; under D11, presentation 0 for
+       TrueHD and a fixed downmix for DTS.
 
 1. **Audit and name the features.**
    - Find where each path in D11's "Build contents" starts and ends in
@@ -1361,6 +1530,9 @@ rejected. Only if none does do the steps below start.
 4. **Tests** (portable, Linux and Windows CI):
    - for each mask, the TrueHD presentation chosen, and the output equal, bit
      for bit, to that presentation routed by the table;
+   - built without `atmos`, no presentation request decodes presentation 3,
+     on every TrueHD fixture. A 5.1-core Atmos sample, once found, gives its
+     6-channel presentation for a request of 2 (gate measurement 4);
    - the routing table for every label set the fixtures and the corpus give;
    - the DRC ramp against `orender_engine::render::fill_pcm_f32_drc` on the
      same frames, as a dev-dependency only, so the DLL does not link it;
@@ -1370,12 +1542,24 @@ rejected. Only if none does do the steps below start.
      release dry run shows their file lists and sizes against the last
      release;
    - `LICENSES/binary-mf.txt`, `docs/media-foundation.md`, the installer.
-6. **(Windows desktop)** The Phase 2 set in WMP on speakers, and gate
-   measurement 1 again with the new DLL on headphones.
+6. **(Windows desktop)** The Phase 2 set in WMP on headphones, and on
+   loudspeakers when a system is at hand. On headphones, the new DLL against
+   step 0's: they should sound the same, since on beds D11 equals the engine
+   (F15).
+
+The engine leaves the DLL as a whole, once 3′ goes D11's way. Keeping it for
+some codecs would compile all of it in again. DTS:X goes the same way as
+TrueHD, by the bed, before check 5 is run:
+- the family's own code states that the encoder folds every extension feed
+  into that bed (F14);
+- the bed is what every decoder without DTS:X plays.
+
+If check 5 later prefers object rendering for DTS:X, it comes back as the
+small panner, an MFT feature (D11, "Not chosen"), not as the engine.
 
 Done when:
 
-- the gate is recorded and passed;
+- the gate is recorded, test 3′ is run and its result is applied;
 - the release-scope check holds;
 - the crate-isolation and link-map checks show none of the left-out code in
   the DLL;
@@ -1397,7 +1581,11 @@ Done when:
 | WMP plays TrueHD/Atmos, DTS/DTS:X MKV; seek, sync | Windows desktop | 1–2 |
 | soak (memory, handles) | Windows desktop | 3 |
 | install / uninstall from the release zip | Windows desktop (clean VM) | 4 |
-| D11 gate: headphone virtualisation, heights, A/B, 5.1-core Atmos | Windows desktop | 6 |
+| D11 gate: headphone virtualisation, heights, A/B, 5.1-core Atmos (first run: headphones, WinRT player; see "Gate results") | Windows desktop | 6 |
+| stereo endpoints get 7.1, binaural only on request; WMP accepts it; presentation logged | Linux + Windows CI, Windows desktop | 6 (step 0) |
+| blind level-matched preference, TrueHD presentation 2 against the engine's presentation 3 (3′) | Windows desktop | 6 |
+| without `atmos`, presentation 3 is never decoded; 5.1-core Atmos gives 6 channels | Linux + Windows CI | 6 |
+| DTS:X: preference and bed energy (5) | Windows desktop + Linux, when a sample is at hand | 6 |
 | bridge and CLI output and feature resolution unchanged (release scope) | Linux CI + local corpus (`tools/host-baseline`) | 6 |
 | the MFT links none of the engine, E-AC-3, TrueHD-object, Auro, DTS:X or IEC 61937 code (crate isolation, link map) | Linux + Windows CI | 6 |
 | presentation choice, routing table, DRC ramp, timestamps without the engine | Linux + Windows CI | 6 |
@@ -1448,10 +1636,17 @@ Done when:
   - At the pin, `orender_engine` and `renderer` had 754 commits since May
     2026, against 24 for `bridge_api`.
   - Under D11 only `bridge_api` is tracked, and the assembly copy goes.
-- **Losing the binaural stage (D11).** If Windows does not virtualise a 7.1
-  stream for headphones, the engine stays (Phase 6, gate measurement 1).
-  - If it does, the in-MFT HRTF stage goes. What remains is Windows'
-    virtualisation, whose quality this plan does not control.
+- **Losing the binaural stage (D11).** Windows did not virtualise on the one
+  machine measured (F16). The owner nonetheless preferred Windows' plain
+  downmix to the binaural stage (unblinded), so the stage goes.
+  - Users who want binaural lose it with the engine. Until then it stays
+    available on request (step 0).
+  - The preference is one listener's. A user who asks for binaural is a
+    reason to look at an HRTF stage again, as an MFT feature.
+- **Windows' downmix of the 7.1 output** is now what headphone users hear.
+  Its matrix is Windows', not ours, and it has been heard only through the
+  WinRT `MediaPlayer` on one machine. Step 0 checks WMP; test 6 checks the
+  stream's own stereo against it.
 - **Cargo feature unification.** The features of one package are the union
   over everything built in the same `cargo` invocation.
   - That is why D11's features only add code: unification can then only put
