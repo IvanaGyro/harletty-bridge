@@ -26,6 +26,11 @@
 //! file, jumps to that time and plays from there: for `--for` seconds, or to
 //! the end of the file when it is not given (Ctrl-C stops it earlier).
 //!
+//! Level: `mf-player-probe FILE --start S --for N --measure` also records a
+//! WASAPI loopback of the default render endpoint while it plays and prints
+//! `loopback: total X dBFS ...`, the level (RMS of the 100 ms blocks above
+//! -70 dBFS) of what reaches the headphones.
+//!
 //! Everything is printed; nothing here decides anything. The exit code is 0
 //! unless the probe itself fails to run.
 
@@ -41,6 +46,9 @@ fn main() {
         std::process::exit(2);
     }
 }
+
+#[cfg(windows)]
+mod loopback;
 
 #[cfg(windows)]
 mod windows_main {
@@ -149,6 +157,7 @@ mod windows_main {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(default)
         };
+        let measure = args.iter().any(|a| a == "--measure");
         let (start_at, play_for) = (
             args.iter()
                 .any(|a| a == "--start")
@@ -165,7 +174,15 @@ mod windows_main {
         match args.first().filter(|a| !a.starts_with("--")) {
             Some(file) => {
                 println!("\n== 3. MediaPlayer ({file}) ==");
-                play(file, soak, seek_every, report_every, start_at, play_for)?;
+                play(
+                    file,
+                    soak,
+                    seek_every,
+                    report_every,
+                    start_at,
+                    play_for,
+                    measure,
+                )?;
                 list_modules();
             }
             None => println!("\n(no file given: skipping the MediaPlayer step)"),
@@ -301,6 +318,7 @@ mod windows_main {
         report_every: u64,
         start_at: Option<u64>,
         play_for: Option<u64>,
+        measure: bool,
     ) -> Result<()> {
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
         let uri = Uri::CreateUri(&HSTRING::from(file_uri(&path.display().to_string())))?;
@@ -343,6 +361,8 @@ mod windows_main {
         if soak > 0 {
             player.SetIsLoopingEnabled(true)?;
         }
+        // The loopback capture starts first, so it is listening when the sound does.
+        let capture = measure.then(crate::loopback::Capture::start);
         player.SetSource(&source)?;
         player.Play()?;
 
@@ -433,6 +453,23 @@ mod windows_main {
         if soak > 0 {
             let (mib, handles) = resources();
             println!("  end: working set {mib:.1} MiB, handles {handles}");
+        }
+        if let Some(capture) = capture {
+            match capture.finish() {
+                Ok(r) => println!(
+                    "loopback: total {:.2} dBFS | per channel {:?} | {} of {} blocks above -70 dBFS | {} Hz, {} channels",
+                    r.total_db,
+                    r.per_channel_db
+                        .iter()
+                        .map(|d| format!("{d:.1}"))
+                        .collect::<Vec<_>>(),
+                    r.blocks_used,
+                    r.blocks_total,
+                    r.rate,
+                    r.channels
+                ),
+                Err(e) => println!("loopback: failed: {e}"),
+            }
         }
         Ok(())
     }
