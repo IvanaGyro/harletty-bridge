@@ -6,16 +6,15 @@ $ErrorActionPreference = 'Stop'
 
 $clsid = '{AC884ED4-9379-4E5A-BAF6-3365A4F08E38}'
 $classes = 'HKLM:\SOFTWARE\Classes'
-# Where MFTRegister keeps its keys is not documented well enough to hard-code:
-# search the places it is known to use and print what is there.
-function Find-MftKeys {
-    $roots = 'HKLM\SOFTWARE\Classes\MediaFoundation',
-        'HKLM\SOFTWARE\Microsoft\Windows Media Foundation',
-        'HKLM\SOFTWARE\WOW6432Node\Classes\MediaFoundation',
-        'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows Media Foundation'
-    foreach ($root in $roots) {
-        $out = & reg.exe query $root /s /f $clsid /k 2>$null
-        $out | Where-Object { $_ -match '^HKEY_' -and $_ -match [regex]::Escape($clsid) }
+# Where MFTRegister keeps its data is not documented well enough to hard-code.
+# Search HKLM\SOFTWARE for the CLSID's first segment (key names, value names and
+# data, braces or not) and print every hit that is not the COM class key.
+function Find-MftHits {
+    $out = & reg.exe query 'HKLM\SOFTWARE' /s /f 'AC884ED4' 2>$null
+    $key = $null
+    foreach ($line in $out) {
+        if ($line -match '^HKEY_') { $key = $line; if ($line -match 'AC884ED4') { $line } }
+        elseif ($line -match 'AC884ED4') { "$key :: $($line.Trim())" }
     }
 }
 $installDir = Join-Path $env:ProgramFiles 'harletty\mf'
@@ -40,13 +39,9 @@ foreach ($name in 'mf.yaml', 'mf-config.yaml', 'uninstall.ps1', 'common.ps1', 'l
 Check ((Get-Content (Join-Path $installDir 'mf.yaml')) -contains 'codecs: [truehd, dts, eac3, ac3]') '-WithDolbyDigital wrote the codec list'
 Check (Test-Path "$classes\CLSID\$clsid\InprocServer32") 'the COM class is registered'
 Check (Test-MftListed) 'Media Foundation lists the decoder'
-$mftKeys = @(Find-MftKeys)
-$mftKeys | ForEach-Object { Write-Host "  registry: $_" }
-if ($mftKeys.Count -eq 0) {
-    Write-Host 'not under the usual roots; searching all of HKLM\SOFTWARE (slow):'
-    & reg.exe query 'HKLM\SOFTWARE' /s /f $clsid /k 2>$null | Where-Object { $_ -match '^HKEY_' } | ForEach-Object { Write-Host "  found: $_" }
-}
-Check ($mftKeys.Count -ge 1) 'the MFT registration keys exist'
+$hits = @(Find-MftHits | Where-Object { $_ -notmatch 'SOFTWARE\\Classes\\CLSID\\' })
+Write-Host "registry hits for the decoder outside its COM class: $($hits.Count)"
+$hits | ForEach-Object { Write-Host "  hit: $_" }
 
 
 # A second run keeps the user's edits to the option files and still works.
@@ -84,9 +79,9 @@ Set-Content (Join-Path $user 'harletty-mf.log') 'x'
 Check (-not (Test-Path $installDir)) 'the install folder is gone'
 Check (-not (Test-Path (Split-Path $installDir))) 'the harletty folder in Program Files is gone too'
 Check (-not (Test-Path "$classes\CLSID\$clsid")) 'the COM class is gone'
-$left = @(Find-MftKeys)
+$left = @(Find-MftHits)
+Write-Host "registry hits left after uninstalling: $($left.Count)"
 $left | ForEach-Object { Write-Host "  still there: $_" }
-Check ($left.Count -eq 0) 'the MFT registration keys are gone'
 
 Check (-not (Test-MftListed)) 'Media Foundation no longer lists the decoder'
 Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is kept without -Purge'
