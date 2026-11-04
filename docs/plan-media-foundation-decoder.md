@@ -537,13 +537,52 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
   - Generating it, rather than shipping presets, keeps the labels and the
     mask identical. A preset's back-versus-side naming could otherwise
     disagree with a 5.1-side endpoint.
-  - **An endpoint of one or two speakers gets 7.1 (`0x63F`), not stereo**
-    (Phase 6 step 0). The engine renders to 7.1 and Windows downmixes it.
-    - This is the output the owner heard as "much better" than the forced
-      binaural one.
-    - Measured with the WinRT `MediaPlayer` only. WMP Legacy has to accept an
-      8-channel type on a stereo endpoint too (Phase 6 step 0).
-    - `speaker_mask` still overrides it.
+  - **An endpoint of one or two speakers still gets the full stream, as a
+    full layout: 7.1 (`0x63F`) by default, 7.1.4 (`0x2D63F`) on request**
+    (Phase 6 step 0). The decoder never reduces the stream to stereo itself;
+    the engine renders the whole stream, bed and objects, to that layout, and
+    Windows downmixes it for the endpoint.
+    - **The owner's decision:** a stereo or mono endpoint should still receive
+      the full stream: TrueHD + Atmos as 7.1 + objects, E-AC-3 JOC as 5.1 +
+      objects, with an option for 7.1.4 when Atmos is available.
+    - **What Media Foundation can carry** decides the form:
+      - A float PCM output is fixed speaker channels only, and no documented
+        route takes objects from a decoder (F6). Objects as objects stay
+        Phase 5 research.
+      - "7.1 + objects" would also play every object twice: the 7.1 (and
+        5.1) presentation is the encoder's render of the whole mix, objects
+        included (F14). The stream's full content is its bed plus its
+        objects, which the engine renders.
+      - So the full stream reaches the system as the engine's render to the
+        largest layout chosen. That is the owner's "full stream" in the one
+        form the decoder can deliver.
+    - **The layout is the same for every codec.** E-AC-3 JOC's 5.1 core is
+      not its limit: its objects are rendered to 7.1 or 7.1.4 like TrueHD's.
+      A 5.1 bed lands on the 7.1 layout unchanged (F15).
+    - **7.1.4 is an option, `stereo_endpoint_mask` in `mf.yaml`,** not chosen
+      per stream:
+      - The output type is fixed when the input type is set, before a packet
+        is decoded. Whether a stream carries objects is only known after
+        that, and changing the type mid-stream is untested (Phase 3 step 4).
+      - Applying the option to every stream should cost nothing on streams
+        without objects. Their channels should reach the 7.1.4 layout
+        unchanged, with the four top channels silent. That is expected from
+        F15, which showed the identity for a 7.1 layout; step 0 tests it for
+        7.1.4.
+      - In the gate run, presentation 2 at 7.1 and at 7.1.4 could not be told
+        apart (2 of 6, blind).
+      - On Atmos the two layouts do sound different after Windows' downmix
+        (6 of 6, blind). Which is better is not measured, hence an option
+        and 7.1 as the default.
+      - Any mask of three or more speakers the layout table covers is
+        accepted there. Others are refused with a log line, and 7.1 is used.
+    - The 7.1 output is the one the owner heard as "much better" than the
+      forced binaural one. It was measured with the WinRT `MediaPlayer`
+      only; WMP Legacy has to accept 8- and 12-channel types on a stereo
+      endpoint too (Phase 6 step 0).
+    - `speaker_mask` still overrides both. An endpoint of three or more
+      speakers keeps its own mask: its speakers are real, and a larger
+      layout would only be downmixed back to them.
 - **D5. A config of its own, in two places.** The defaults are
   `mf-config.yaml`, next to the DLL, written by the installer. A per-user
   override is `%LOCALAPPDATA%\harletty\mf\config.yaml`, if present, and wins.
@@ -551,7 +590,8 @@ Facts the design rests on. Items marked *verify* are checked in Phase 0.
     `render.osc: false` and no `bridge_path(s)`, since the MFT supplies the
     decoders itself (D3, then D10).
   - The MFT's own options live in a sibling file, `mf.yaml`, so the engine
-    schema stays untouched: `speaker_mask`, `codecs`, `log_level`,
+    schema stays untouched: `speaker_mask`, `stereo_endpoint_mask` (from
+    Phase 6 step 0, D4), `codecs`, `log_level`,
     `log_file`. It is looked up the same way: next to the DLL, overridden by
     `%LOCALAPPDATA%\harletty\mf\mf.yaml`.
   - Binaural for headphones is the engine's own option
@@ -802,8 +842,9 @@ wmplayer.exe
  └─ Streaming Audio Renderer (SAR) ─ WASAPI shared mode ─ speakers
 ```
 
-From Phase 6 step 0, a stereo or mono endpoint gets the 7.1 mask (`0x63F`),
-which Windows downmixes (D4).
+From Phase 6 step 0, a stereo or mono endpoint gets the full layout: 7.1
+(`0x63F`), or 7.1.4 (`0x2D63F`) when `stereo_endpoint_mask` asks. Windows
+downmixes it (D4).
 
 ### The MFT contract (what `com/transform.rs` implements)
 
@@ -908,9 +949,13 @@ are ones `label_for_name` maps to the label in the third column:
 - The YAML is written to `%LOCALAPPDATA%\harletty\mf\layout-<mask>.yaml`,
   only when absent or different, because `from_paths` takes a path. A mask
   with no speaker left falls back to stereo.
-- From Phase 6 step 0, `plan` gives a mask of two speakers or fewer the 7.1
-  layout, not the forced binaural plan. Binaural runs only when
-  `mf-config.yaml` asks for it.
+- From Phase 6 step 0, `plan` gives a mask of two speakers or fewer the
+  stereo-endpoint layout (`stereo_endpoint_mask`, 7.1 by default; D4), not
+  the forced binaural plan.
+  - `plan` takes that mask as an argument, so it stays portable and
+    testable.
+  - Binaural runs only when `mf-config.yaml` asks for it, and then as
+    today.
 
 ## Files
 
@@ -962,10 +1007,16 @@ Changed:
 
 Phase 6 step 0:
 
-- `mf-decoder/src/portable/layout.rs`: `plan` (stereo and mono masks get
-  7.1).
-- `mf-decoder/src/portable/session.rs`: the presentation log line.
-- Their tests.
+- `mf-decoder/src/portable/layout.rs`: `plan(mask, stereo_endpoint_mask)`.
+  Stereo and mono masks get the stereo-endpoint layout.
+- `mf-decoder/src/portable/config.rs`: `stereo_endpoint_mask` (a number or
+  `0x…` text, like `speaker_mask`), overlaid key by key, and its check.
+- `mf-decoder/src/portable/session.rs`: passes it to `plan`; the presentation
+  log line.
+- `mf-decoder/src/com/transform.rs`: reads it from the config.
+- `mf-decoder/install/mf.yaml`: the key, commented out, with its two useful
+  values.
+- `mf-decoder/tests/session.rs` and the unit tests (Phase 6 step 0).
 - `docs/media-foundation.md`, "Speakers".
 
 ## Phases
@@ -1513,24 +1564,51 @@ D11 is rejected.
 
 **Steps:**
 
-0. **Stereo endpoints get 7.1** (D4), with the engine:
-   - `layout::plan`: an endpoint of two speakers or fewer gets `0x63F` for
-     output and render, not forced binaural. The binaural stage runs only
-     when `mf-config.yaml` sets `render.binaural.output_mode: binaural`, and
-     then as today.
+0. **Stereo endpoints get the full stream as a full layout** (D4), with the
+   engine:
+   - `layout::plan(mask, stereo_endpoint_mask)`: an endpoint of two speakers
+     or fewer gets `stereo_endpoint_mask` for output and render, not forced
+     binaural. The default is `0x63F` (7.1); `0x2D63F` (7.1.4) is the other
+     useful value.
+     - The binaural stage runs only when `mf-config.yaml` sets
+       `render.binaural.output_mode: binaural`, and then as today.
+     - `speaker_mask`, when set, still wins over both.
+   - `mf.yaml` gains `stereo_endpoint_mask`, parsed like `speaker_mask`.
+     - A mask with fewer than three speakers the layout table covers is
+       refused with a log line, and 7.1 is used.
+     - It applies only to endpoints of one or two speakers.
    - The session logs the decoded presentation (`Engine::source_label`,
-     `bed_labels`) at the start and whenever it changes. The identification
-     test had no such line.
-   - Tests: `plan` for stereo and mono masks; a session at mask `0x3` returns
-     8 channels.
-   - `docs/media-foundation.md`, "Speakers": stereo devices get 7.1 and
-     Windows downmixes it; binaural is an option.
-   - **(Windows desktop)** Two checks:
-     - WMP Legacy accepts the 8-channel type on a stereo endpoint and plays
-       it.
-     - The WinRT `MediaPlayer` result is repeated with the new DLL.
-     - If WMP refuses, the transform also offers a stereo type, second (index
-       1): the engine's binaural render.
+     `bed_labels`) and the output mask at the start and whenever they change.
+     The identification test had no such line.
+   - **Tests** (portable, Linux and Windows CI):
+     - `plan` for masks `0x3` and `0x4`, with no option (gives `0x63F`), with
+       `0x2D63F` (gives `0x2D63F`), and with an invalid value (gives
+       `0x63F`);
+     - `plan` for a 5.1 endpoint ignores the option;
+     - config parsing of the key (number, `0x…` text, nonsense) and the user
+       folder overriding it;
+     - a session at mask `0x3` returns 8 channels by default, and 12 with
+       the option;
+     - **streams without objects at 7.1.4** (the DTS core fixture, and the
+       TrueHD 5.1 sample where CI has it): the four top channels are exactly
+       zero, and the other eight equal the 7.1 session's output, sample for
+       sample;
+     - an object stream at 7.1.4 (`atmos.thd` where CI has it; the E-AC-3
+       JOC fixture): the top channels carry signal.
+   - `docs/media-foundation.md`, "Speakers", says:
+     - stereo devices get the whole stream rendered to 7.1, and Windows
+       downmixes it;
+     - `stereo_endpoint_mask: 0x2D63F` renders to 7.1.4 instead;
+     - objects are never passed to Windows as objects (F6);
+     - binaural is an option.
+   - `install/mf.yaml`: the key, commented out, with both values explained.
+   - **(Windows desktop)** Three checks:
+     - WMP Legacy accepts the 8-channel type, and with the option the
+       12-channel type, on a stereo endpoint, and plays them.
+     - The WinRT `MediaPlayer` result is repeated with the new DLL, for both
+       values.
+     - If WMP refuses either type, the transform also offers a stereo type,
+       second (index 1): the engine's binaural render.
 
 Done when:
 
@@ -1555,7 +1633,7 @@ Done when:
 | soak (memory, handles) | Windows desktop | 3 |
 | install / uninstall from the release zip | Windows desktop (clean VM) | 4 |
 | D11 gate, first run (headphones, WinRT player): recorded, engine kept | Windows desktop | 6 |
-| stereo endpoints get 7.1, binaural only on request; WMP accepts it; presentation logged | Linux + Windows CI, Windows desktop | 6 (step 0) |
+| stereo endpoints get 7.1, or 7.1.4 with `stereo_endpoint_mask`; streams without objects leave the tops silent; binaural only on request; WMP accepts 8 and 12 channels; presentation logged | Linux + Windows CI, Windows desktop | 6 (step 0) |
 | a shared-crate feature (Phase 5, IEC 61937) leaves bridge and CLI output and feature resolution unchanged (release scope) | Linux CI + local corpus (`tools/host-baseline`) | 5 |
 | presentation choice, routing table, DRC ramp, timestamps without the engine | Linux + Windows CI | 6 |
 
@@ -1608,14 +1686,18 @@ Done when:
 - **Binaural off by default (Phase 6 step 0).** Windows did not virtualise
   on the one machine measured (F16). The owner preferred Windows' plain
   downmix of the 7.1 output to the binaural stage (unblinded). So stereo
-  endpoints get 7.1, and binaural only on request.
+  endpoints get the full layout (7.1, or 7.1.4 on request), and binaural
+  only on request.
   - The preference is one listener's on one pair of earbuds. The option
     stays, so a user who prefers binaural keeps it.
-- **Windows' downmix of the 7.1 output** is now what headphone users hear by
-  default.
-  - Its matrix is Windows', not ours.
+- **Windows' downmix of the 7.1 (or 7.1.4) output** is now what headphone
+  and laptop-speaker users hear by default.
+  - Its matrix is Windows', not ours, and how it folds the four top channels
+    is not known.
   - It has been heard only through the WinRT `MediaPlayer` on one machine.
     Step 0 checks WMP.
+  - Which layout sounds better on Atmos is not measured. That is why 7.1.4
+    is an option, not the default.
 - **Cargo feature unification.** The features of one package are the union
   over everything built in the same `cargo` invocation.
   - That is why the release-scope rule's features only add code:
