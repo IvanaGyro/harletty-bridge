@@ -346,7 +346,7 @@ mod windows_main {
         player.SetSource(&source)?;
         player.Play()?;
 
-        let start = Instant::now();
+        let mut start = Instant::now();
         let mut last_position = TimeSpan { Duration: 0 };
         let mut advanced = false;
         // `--for` wins; a soak runs its time; `--start` plays to the end of the
@@ -360,9 +360,21 @@ mod windows_main {
         let start_s = start_at.unwrap_or(0);
         let mut seeked = start_s == 0;
         let mut ended = false;
+        // A bounded listening (--start with --for) counts its seconds from the
+        // moment the file is open and at the requested position, not from Play().
+        let listening = start_at.is_some() && play_for.is_some();
+        let mut opened = false;
+        let open_wait = Duration::from_secs(120);
         let (mut next_seek, mut next_report, mut rng) = (seek_every, report_every, 0x5EEDu64);
         let session = player.PlaybackSession()?;
-        while start.elapsed() < run_for && !ended {
+        while !ended
+            && start.elapsed()
+                < if listening && !opened {
+                    open_wait
+                } else {
+                    run_for
+                }
+        {
             if soak > 0 {
                 let elapsed = start.elapsed().as_secs();
                 if elapsed >= next_seek {
@@ -390,13 +402,19 @@ mod windows_main {
                 if (event == "MediaEnded" || event.starts_with("MediaFailed")) && soak == 0 {
                     ended = true;
                 }
-                if event == "MediaOpened" && !seeked {
-                    seeked = true;
-                    let to = start_s as i64 * 10_000_000;
-                    match session.SetPosition(TimeSpan { Duration: to }) {
-                        Ok(()) => println!("  jumped to {start_s} s"),
-                        Err(e) => println!("  could not jump to {start_s} s: {e}"),
+                if event == "MediaOpened" {
+                    if !seeked {
+                        seeked = true;
+                        let to = start_s as i64 * 10_000_000;
+                        match session.SetPosition(TimeSpan { Duration: to }) {
+                            Ok(()) => println!("  jumped to {start_s} s"),
+                            Err(e) => println!("  could not jump to {start_s} s: {e}"),
+                        }
                     }
+                    if listening && !opened {
+                        start = Instant::now();
+                    }
+                    opened = true;
                 }
             }
             if let Ok(position) = player.PlaybackSession().and_then(|s| s.Position()) {
