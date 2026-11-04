@@ -26,6 +26,10 @@
 //! file, jumps to that time and plays from there: for `--for` seconds, or to
 //! the end of the file when it is not given (Ctrl-C stops it earlier).
 //!
+//! Forcing a decoder: `--force-dll PATH` loads that `harletty_mf.dll` and
+//! registers it for E-AC-3 and AC-3 in this process only, so it is tried before
+//! the system's own decoders. `codecs:` in `mf.yaml` must list `eac3` and `ac3`.
+//!
 //! Audio track: `--audio-track N` (0-based, in the file's order) plays that
 //! track instead of the default one; the tracks are listed when it is used.
 //!
@@ -62,12 +66,15 @@ mod windows_main {
     use windows::Media::Core::{CodecCategory, CodecKind, CodecQuery, MediaSource};
     use windows::Media::Playback::{MediaPlaybackItem, MediaPlayer, MediaPlayerFailedEventArgs};
     use windows::Win32::Media::MediaFoundation::*;
-    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
+    use windows::Win32::System::Com::{
+        COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, IClassFactory,
+    };
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::Win32::System::ProcessStatus::{
         EnumProcessModules, GetModuleFileNameExW, GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
-    use windows::core::{GUID, HSTRING, IInspectable, Result};
+    use windows::core::{GUID, HSTRING, IInspectable, Interface, Result, w};
 
     /// The subtypes the plan registers (TrueHD, DTS-HD, DTS, E-AC-3, AC-3).
     const SUBTYPES: [(&str, GUID); 5] = [
@@ -93,6 +100,43 @@ mod windows_main {
         ),
     ];
 
+    /// Register the decoder in `dll` for E-AC-3 and AC-3 in this process only.
+    /// The decoder still has to accept them: `codecs:` in mf.yaml must list
+    /// `eac3` and `ac3`.
+    fn register_local(dll: &str) -> Result<()> {
+        type GetClassObject = unsafe extern "system" fn(
+            *const GUID,
+            *const GUID,
+            *mut *mut std::ffi::c_void,
+        ) -> windows::core::HRESULT;
+        unsafe {
+            let module = LoadLibraryW(&HSTRING::from(dll))?;
+            let get = GetProcAddress(module, windows::core::s!("DllGetClassObject"))
+                .ok_or_else(windows::core::Error::from_thread)?;
+            let get: GetClassObject = std::mem::transmute(get);
+            let clsid = GUID::from_u128(0xAC884ED4_9379_4E5A_BAF6_3365A4F08E38);
+            let mut raw = std::ptr::null_mut();
+            get(&clsid, &IClassFactory::IID, &mut raw).ok()?;
+            let factory = IClassFactory::from_raw(raw);
+            let inputs = [SUBTYPES[3].1, SUBTYPES[4].1].map(|guid| MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Audio,
+                guidSubtype: guid,
+            });
+            let outputs = [MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Audio,
+                guidSubtype: MFAudioFormat_Float,
+            }];
+            MFTRegisterLocal(
+                &factory,
+                &MFT_CATEGORY_AUDIO_DECODER,
+                w!("harletty (local)"),
+                0,
+                Some(&inputs),
+                Some(&outputs),
+            )
+        }
+    }
+
     fn braced(guid: &GUID) -> String {
         let text = format!("{guid:?}");
         format!("{{{}}}", text.trim_matches(|c| c == '{' || c == '}'))
@@ -104,6 +148,20 @@ mod windows_main {
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
         }
         println!("process: {:?}", std::env::current_exe().ok());
+
+        // --force-dll PATH: register that decoder for E-AC-3 and AC-3 in this
+        // process only (MFTRegisterLocal), so it is tried before the system's.
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Some(dll) = args
+            .iter()
+            .position(|a| a == "--force-dll")
+            .and_then(|i| args.get(i + 1))
+        {
+            match register_local(dll) {
+                Ok(()) => println!("registered {dll} for E-AC-3 and AC-3 in this process only"),
+                Err(e) => println!("could not register {dll} locally: {e}"),
+            }
+        }
 
         println!("\n== 1. MFTEnumEx (audio decoders) ==");
         for (name, subtype) in SUBTYPES {
