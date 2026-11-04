@@ -22,6 +22,10 @@
 //! linked into `harletty_mf.dll` there must be none. This replaces the plan's
 //! `tasklist /m` check on a machine whose Windows Media Player is 32-bit.
 //!
+//! Listening: `mf-player-probe FILE --start SECONDS [--for SECONDS]` opens the
+//! file, jumps to that time and plays from there: for `--for` seconds, or to
+//! the end of the file when it is not given (Ctrl-C stops it earlier).
+//!
 //! Everything is printed; nothing here decides anything. The exit code is 0
 //! unless the probe itself fails to run.
 
@@ -145,6 +149,14 @@ mod windows_main {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(default)
         };
+        let (start_at, play_for) = (
+            args.iter()
+                .any(|a| a == "--start")
+                .then(|| number("--start", 0)),
+            args.iter()
+                .any(|a| a == "--for")
+                .then(|| number("--for", 0)),
+        );
         let (soak, seek_every, report_every) = (
             number("--soak", 0),
             number("--seek-every", 20).max(1),
@@ -153,7 +165,7 @@ mod windows_main {
         match args.first().filter(|a| !a.starts_with("--")) {
             Some(file) => {
                 println!("\n== 3. MediaPlayer ({file}) ==");
-                play(file, soak, seek_every, report_every)?;
+                play(file, soak, seek_every, report_every, start_at, play_for)?;
                 list_modules();
             }
             None => println!("\n(no file given: skipping the MediaPlayer step)"),
@@ -282,7 +294,14 @@ mod windows_main {
         uri
     }
 
-    fn play(file: &str, soak: u64, seek_every: u64, report_every: u64) -> Result<()> {
+    fn play(
+        file: &str,
+        soak: u64,
+        seek_every: u64,
+        report_every: u64,
+        start_at: Option<u64>,
+        play_for: Option<u64>,
+    ) -> Result<()> {
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
         let uri = Uri::CreateUri(&HSTRING::from(file_uri(&path.display().to_string())))?;
         let source = MediaSource::CreateFromUri(&uri)?;
@@ -313,6 +332,13 @@ mod windows_main {
                 Ok(())
             },
         ))?;
+        let ended = tx.clone();
+        player.MediaEnded(&TypedEventHandler::new(
+            move |_: windows::core::Ref<MediaPlayer>, _: windows::core::Ref<IInspectable>| {
+                let _ = ended.send("MediaEnded".into());
+                Ok(())
+            },
+        ))?;
         // A soak outlasts a short file: replay it instead of idling at the end.
         if soak > 0 {
             player.SetIsLoopingEnabled(true)?;
@@ -320,13 +346,35 @@ mod windows_main {
         player.SetSource(&source)?;
         player.Play()?;
 
-        let start = Instant::now();
+        let mut start = Instant::now();
         let mut last_position = TimeSpan { Duration: 0 };
         let mut advanced = false;
-        let run_for = Duration::from_secs(if soak == 0 { 10 } else { soak });
+        // `--for` wins; a soak runs its time; `--start` plays to the end of the
+        // file; a plain run looks for ten seconds.
+        let run_for = Duration::from_secs(match (play_for, soak, start_at) {
+            (Some(n), _, _) => n,
+            (None, n, _) if n > 0 => n,
+            (None, _, Some(_)) => u64::MAX / 4,
+            _ => 10,
+        });
+        let start_s = start_at.unwrap_or(0);
+        let mut seeked = start_s == 0;
+        let mut ended = false;
+        // A bounded listening (--start with --for) counts its seconds from the
+        // moment the file is open and at the requested position, not from Play().
+        let listening = start_at.is_some() && play_for.is_some();
+        let mut opened = false;
+        let open_wait = Duration::from_secs(120);
         let (mut next_seek, mut next_report, mut rng) = (seek_every, report_every, 0x5EEDu64);
         let session = player.PlaybackSession()?;
-        while start.elapsed() < run_for {
+        while !ended
+            && start.elapsed()
+                < if listening && !opened {
+                    open_wait
+                } else {
+                    run_for
+                }
+        {
             if soak > 0 {
                 let elapsed = start.elapsed().as_secs();
                 if elapsed >= next_seek {
@@ -350,6 +398,24 @@ mod windows_main {
             }
             while let Ok(event) = rx.try_recv() {
                 println!("  +{:.1}s {event}", start.elapsed().as_secs_f32());
+                // A failed open or decode never reaches the end: stop too.
+                if (event == "MediaEnded" || event.starts_with("MediaFailed")) && soak == 0 {
+                    ended = true;
+                }
+                if event == "MediaOpened" {
+                    if !seeked {
+                        seeked = true;
+                        let to = start_s as i64 * 10_000_000;
+                        match session.SetPosition(TimeSpan { Duration: to }) {
+                            Ok(()) => println!("  jumped to {start_s} s"),
+                            Err(e) => println!("  could not jump to {start_s} s: {e}"),
+                        }
+                    }
+                    if listening && !opened {
+                        start = Instant::now();
+                    }
+                    opened = true;
+                }
             }
             if let Ok(position) = player.PlaybackSession().and_then(|s| s.Position()) {
                 if position.Duration > last_position.Duration {
@@ -360,8 +426,8 @@ mod windows_main {
             std::thread::sleep(Duration::from_millis(200));
         }
         println!(
-            "  position after {} s: {:.2}s, advanced={advanced}",
-            run_for.as_secs(),
+            "  position after {:.0} s: {:.2}s, advanced={advanced}",
+            start.elapsed().as_secs_f32(),
             last_position.Duration as f64 / 10_000_000.0
         );
         if soak > 0 {

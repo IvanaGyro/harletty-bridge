@@ -148,6 +148,14 @@ jobs:
           ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-arm64.zip
         working-directory: harletty-bridge
 
+      # What a user runs: the Windows PowerShell that ships with Windows (5.1).
+      - name: Install and uninstall from the archive (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-arm64.zip
+        working-directory: harletty-bridge
+
       # For testing on a Windows ARM64 machine: download from the run's page.
       # Named by commit, so artifacts from different pushes do not collide.
       - name: Upload artifacts
@@ -243,6 +251,14 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path stage/* -DestinationPath harletty-mf-ci-windows-x64.zip
+          ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-x64.zip
+        working-directory: harletty-bridge
+
+      # What a user runs: the Windows PowerShell that ships with Windows (5.1).
+      - name: Install and uninstall from the archive (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
           ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-x64.zip
         working-directory: harletty-bridge
 

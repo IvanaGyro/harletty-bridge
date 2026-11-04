@@ -21,6 +21,17 @@ fn clsid_key() -> HSTRING {
     ))
 }
 
+/// `MFTUnregister` removes the registration but leaves its entry under
+/// `Transforms\Categories\<category>\`, named by the lower-case CLSID without
+/// braces (found on a Windows runner: run 41681799015). Taken out here too.
+fn category_entry_key() -> HSTRING {
+    HSTRING::from(format!(
+        "SOFTWARE\\Classes\\MediaFoundation\\Transforms\\Categories\\{}\\{}",
+        format!("{MFT_CATEGORY_AUDIO_DECODER:?}").to_lowercase(),
+        format!("{CLSID_DECODER:?}").to_lowercase()
+    ))
+}
+
 fn set_sz(subkey: &HSTRING, name: PCWSTR, value: &str) -> windows::core::Result<()> {
     let wide: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
     unsafe {
@@ -88,6 +99,12 @@ pub fn unregister() -> windows::core::Result<()> {
         } else {
             key.ok()
         };
-        mft.and(key)
+        let entry = RegDeleteTreeW(HKEY_LOCAL_MACHINE, &category_entry_key());
+        let entry = if entry == ERROR_FILE_NOT_FOUND {
+            Ok(())
+        } else {
+            entry.ok()
+        };
+        mft.and(key).and(entry)
     }
 }

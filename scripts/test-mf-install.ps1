@@ -6,6 +6,14 @@ $ErrorActionPreference = 'Stop'
 
 $clsid = '{AC884ED4-9379-4E5A-BAF6-3365A4F08E38}'
 $classes = 'HKLM:\SOFTWARE\Classes'
+# Where MFTRegister keeps its data (found by searching a runner's registry):
+# the registration, and its entry under the audio decoder category. Both are
+# named by the lower-case CLSID without braces.
+$guid = $clsid.Trim('{}').ToLower()
+$mfKeys = @(
+    "HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\$guid",
+    "HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\Categories\9ea73fb4-ef7a-4559-8d5d-719d8f0426c7\$guid"
+)
 $installDir = Join-Path $env:ProgramFiles 'harletty\mf'
 $work = Join-Path ([IO.Path]::GetTempPath()) "harletty-mf-install-$PID"
 Expand-Archive -Path $Zip -DestinationPath $work
@@ -28,6 +36,8 @@ foreach ($name in 'mf.yaml', 'mf-config.yaml', 'uninstall.ps1', 'common.ps1', 'l
 Check ((Get-Content (Join-Path $installDir 'mf.yaml')) -contains 'codecs: [truehd, dts, eac3, ac3]') '-WithDolbyDigital wrote the codec list'
 Check (Test-Path "$classes\CLSID\$clsid\InprocServer32") 'the COM class is registered'
 Check (Test-MftListed) 'Media Foundation lists the decoder'
+foreach ($key in $mfKeys) { Check (Test-Path $key) "registry key exists: $key" }
+
 
 # A second run keeps the user's edits to the option files and still works.
 Add-Content (Join-Path $installDir 'mf.yaml') '# user edit'
@@ -62,7 +72,10 @@ New-Item -ItemType Directory -Force $user | Out-Null
 Set-Content (Join-Path $user 'harletty-mf.log') 'x'
 & (Join-Path $installDir 'uninstall.ps1')
 Check (-not (Test-Path $installDir)) 'the install folder is gone'
+Check (-not (Test-Path (Split-Path $installDir))) 'the harletty folder in Program Files is gone too'
 Check (-not (Test-Path "$classes\CLSID\$clsid")) 'the COM class is gone'
+foreach ($key in $mfKeys) { Check (-not (Test-Path $key)) "registry key is gone: $key" }
+
 Check (-not (Test-MftListed)) 'Media Foundation no longer lists the decoder'
 Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is kept without -Purge'
 
@@ -72,6 +85,7 @@ Check (Test-Path (Join-Path $user 'harletty-mf.log')) 'the per-user folder is ke
 Check (-not (Test-Path $installDir)) 'install.ps1 -Uninstall: the install folder is gone'
 Check (-not (Test-MftListed)) 'install.ps1 -Uninstall: Media Foundation no longer lists the decoder'
 Check (-not (Test-Path $user)) '-Purge deleted the per-user folder'
+Check (-not (Test-Path (Split-Path $user))) '-Purge deleted the empty harletty folder under LocalAppData'
 
 Remove-Item -Recurse -Force $work
 Write-Host 'install / uninstall round trip passed'
