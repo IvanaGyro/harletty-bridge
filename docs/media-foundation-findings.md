@@ -178,8 +178,28 @@ Nothing was measured with an instrument, and no loudspeakers were used.
   and the tops stay silent.
 - **Measured, blind:** the engine's 7.1.4 render of presentation 3 sounds
   different from its 7.1 render, even downmixed to stereo.
-  - Whether the owner prefers it is not measured. That is why the plan's
-    test 3′ includes it.
+  - Whether the owner prefers it is not measured.
+
+**Afterwards (owner):**
+- **Decision: keep the engine.** The blind, level-matched preference test 3′
+  was not run. The owner judged that two-channel Pixel Buds A-Series, through
+  Windows' stereo downmix, cannot show whether presentation 2 or the engine's
+  presentation 3 is better, even at matched levels.
+- **The E-AC-3 check was skipped:** play the E-AC-3 JOC track through
+  Microsoft's decoder and see whether the Spatial audio setting changes
+  anything.
+  - After matching levels, the owner could not tell WMP, mpv and VLC apart on
+    these earbuds. By the owner's account, mpv and VLC hand no objects to the
+    system.
+  - So on this hardware listening cannot show anything. One listener, Pixel
+    Buds A-Series.
+- **The owner's hypothesis:** the Spatial audio settings made no difference
+  because they act only when objects are handed to the system.
+  - It agrees with Microsoft's Spatial Sound documentation (plan F6, F16).
+  - It was not tested on its own.
+- Probe additions for these checks (`--measure` with WASAPI loopback,
+  `--audio-track`, `--force-dll`, `scripts/blind-test-3prime.ps1`) are on
+  the unmerged branch `feat/probe-loopback-measure`.
 
 ## Open (desktop)
 
