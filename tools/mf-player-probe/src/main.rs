@@ -150,7 +150,9 @@ mod windows_main {
                 .unwrap_or(default)
         };
         let (start_at, play_for) = (
-            number("--start", 0),
+            args.iter()
+                .any(|a| a == "--start")
+                .then(|| number("--start", 0)),
             args.iter()
                 .any(|a| a == "--for")
                 .then(|| number("--for", 0)),
@@ -297,7 +299,7 @@ mod windows_main {
         soak: u64,
         seek_every: u64,
         report_every: u64,
-        start_at: u64,
+        start_at: Option<u64>,
         play_for: Option<u64>,
     ) -> Result<()> {
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
@@ -352,10 +354,11 @@ mod windows_main {
         let run_for = Duration::from_secs(match (play_for, soak, start_at) {
             (Some(n), _, _) => n,
             (None, n, _) if n > 0 => n,
-            (None, _, s) if s > 0 => u64::MAX / 4,
+            (None, _, Some(_)) => u64::MAX / 4,
             _ => 10,
         });
-        let mut seeked = start_at == 0;
+        let start_s = start_at.unwrap_or(0);
+        let mut seeked = start_s == 0;
         let mut ended = false;
         let (mut next_seek, mut next_report, mut rng) = (seek_every, report_every, 0x5EEDu64);
         let session = player.PlaybackSession()?;
@@ -383,15 +386,16 @@ mod windows_main {
             }
             while let Ok(event) = rx.try_recv() {
                 println!("  +{:.1}s {event}", start.elapsed().as_secs_f32());
-                if event == "MediaEnded" && soak == 0 {
+                // A failed open or decode never reaches the end: stop too.
+                if (event == "MediaEnded" || event.starts_with("MediaFailed")) && soak == 0 {
                     ended = true;
                 }
                 if event == "MediaOpened" && !seeked {
                     seeked = true;
-                    let to = start_at as i64 * 10_000_000;
+                    let to = start_s as i64 * 10_000_000;
                     match session.SetPosition(TimeSpan { Duration: to }) {
-                        Ok(()) => println!("  jumped to {start_at} s"),
-                        Err(e) => println!("  could not jump to {start_at} s: {e}"),
+                        Ok(()) => println!("  jumped to {start_s} s"),
+                        Err(e) => println!("  could not jump to {start_s} s: {e}"),
                     }
                 }
             }
