@@ -26,6 +26,9 @@
 //! file, jumps to that time and plays from there: for `--for` seconds, or to
 //! the end of the file when it is not given (Ctrl-C stops it earlier).
 //!
+//! Audio track: `--audio-track N` (0-based, in the file's order) plays that
+//! track instead of the default one; the tracks are listed when it is used.
+//!
 //! Level: `mf-player-probe FILE --start S --for N --measure` also records a
 //! WASAPI loopback of the default render endpoint while it plays and prints
 //! `loopback: total X dBFS ...`, the level (RMS of the 100 ms blocks above
@@ -57,7 +60,7 @@ mod windows_main {
 
     use windows::Foundation::{TimeSpan, TypedEventHandler, Uri};
     use windows::Media::Core::{CodecCategory, CodecKind, CodecQuery, MediaSource};
-    use windows::Media::Playback::{MediaPlayer, MediaPlayerFailedEventArgs};
+    use windows::Media::Playback::{MediaPlaybackItem, MediaPlayer, MediaPlayerFailedEventArgs};
     use windows::Win32::Media::MediaFoundation::*;
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
     use windows::Win32::System::ProcessStatus::{
@@ -158,6 +161,11 @@ mod windows_main {
                 .unwrap_or(default)
         };
         let measure = args.iter().any(|a| a == "--measure");
+        let audio_track = args
+            .iter()
+            .position(|a| a == "--audio-track")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<i32>().ok());
         let (start_at, play_for) = (
             args.iter()
                 .any(|a| a == "--start")
@@ -176,12 +184,15 @@ mod windows_main {
                 println!("\n== 3. MediaPlayer ({file}) ==");
                 play(
                     file,
-                    soak,
-                    seek_every,
-                    report_every,
-                    start_at,
-                    play_for,
-                    measure,
+                    &Options {
+                        soak,
+                        seek_every,
+                        report_every,
+                        start_at,
+                        play_for,
+                        measure,
+                        audio_track,
+                    },
                 )?;
                 list_modules();
             }
@@ -311,18 +322,62 @@ mod windows_main {
         uri
     }
 
-    fn play(
-        file: &str,
+    /// Print the file's audio tracks, then select track `n`.
+    fn select_track(item: &MediaPlaybackItem, n: i32) {
+        let tracks = match item.AudioTracks() {
+            Ok(tracks) => tracks,
+            Err(e) => {
+                println!("  could not list the audio tracks: {e}");
+                return;
+            }
+        };
+        for (i, track) in tracks.clone().into_iter().enumerate() {
+            let label = track.Label().map(|l| l.to_string()).unwrap_or_default();
+            let (subtype, channels) = track
+                .GetEncodingProperties()
+                .map(|p| {
+                    (
+                        p.Subtype().map(|s| s.to_string()).unwrap_or_default(),
+                        p.ChannelCount().unwrap_or(0),
+                    )
+                })
+                .unwrap_or_default();
+            println!("  audio track {i}: {label} | {subtype} | {channels} ch");
+        }
+        match tracks.SetSelectedIndex(n) {
+            Ok(()) => println!("  selected audio track {n}"),
+            Err(e) => println!("  could not select audio track {n}: {e}"),
+        }
+    }
+
+    /// What the command line asked for.
+    struct Options {
         soak: u64,
         seek_every: u64,
         report_every: u64,
         start_at: Option<u64>,
         play_for: Option<u64>,
         measure: bool,
-    ) -> Result<()> {
+        audio_track: Option<i32>,
+    }
+
+    fn play(file: &str, options: &Options) -> Result<()> {
+        let Options {
+            soak,
+            seek_every,
+            report_every,
+            start_at,
+            play_for,
+            measure,
+            audio_track,
+        } = *options;
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
         let uri = Uri::CreateUri(&HSTRING::from(file_uri(&path.display().to_string())))?;
         let source = MediaSource::CreateFromUri(&uri)?;
+        // A playback item, to choose the audio track (--audio-track N, 0-based).
+        let item = audio_track
+            .map(|_| MediaPlaybackItem::Create(&source))
+            .transpose()?;
         let player = MediaPlayer::new()?;
         let (tx, rx) = mpsc::channel::<String>();
 
@@ -363,7 +418,10 @@ mod windows_main {
         }
         // The loopback capture starts first, so it is listening when the sound does.
         let capture = measure.then(crate::loopback::Capture::start);
-        player.SetSource(&source)?;
+        match &item {
+            Some(item) => player.SetSource(item)?,
+            None => player.SetSource(&source)?,
+        }
         player.Play()?;
 
         let mut start = Instant::now();
@@ -379,6 +437,7 @@ mod windows_main {
         });
         let start_s = start_at.unwrap_or(0);
         let mut seeked = start_s == 0;
+        let mut tracked = false;
         let mut ended = false;
         // A bounded listening (--start with --for) counts its seconds from the
         // moment the file is open and at the requested position, not from Play().
@@ -421,6 +480,14 @@ mod windows_main {
                 // A failed open or decode never reaches the end: stop too.
                 if (event == "MediaEnded" || event.starts_with("MediaFailed")) && soak == 0 {
                     ended = true;
+                }
+                if event == "MediaOpened" && !tracked {
+                    tracked = true;
+                    if let (Some(item), Some(n)) = (&item, audio_track) {
+                        select_track(item, n);
+                        // The switch rebuilds the topology: let it settle before jumping.
+                        std::thread::sleep(Duration::from_millis(500));
+                    }
                 }
                 if event == "MediaOpened" {
                     if !seeked {
