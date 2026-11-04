@@ -90,7 +90,7 @@ function Get-PValue([int]$k, [int]$n) {   # one-sided, p = 0.5
 
 # Keep what was there.
 $backups = @{}
-foreach ($f in $yaml, $cfg) { if (Test-Path $f) { $backups[$f] = Get-Content $f -Raw } }
+foreach ($f in $yaml, $cfg) { if (Test-Path $f) { $backups[$f] = [IO.File]::ReadAllBytes($f) } }
 $oldLog = $env:HARLETTY_LOG
 $env:HARLETTY_LOG = 'debug'
 try {
@@ -142,9 +142,14 @@ try {
             do {
                 $answer = (Read-Host 'Which would you rather listen to?  1 = first   2 = second   r = replay both').Trim().ToLower()
             } until ($answer -in '1', '2', 'r')
+            # A trial that did not play the intended conditions is heard again, not counted.
+            $okChannels = ($playedFirst.Channels -eq $conditions[$first].Channels) -and ($playedSecond.Channels -eq $conditions[$second].Channels)
+            if (-not $okChannels -and $answer -ne 'r') {
+                Write-Warning 'The decoder log did not show the expected channel count for this trial. It will be played again.'
+                $answer = 'r'
+            }
         }
         $chosen = if ($answer -eq '1') { $first } else { $second }
-        $okChannels = ($playedFirst.Channels -eq $conditions[$first].Channels) -and ($playedSecond.Channels -eq $conditions[$second].Channels)
         $results += [pscustomobject]@{
             Trial = $n; Pair = "R vs $($spec.Pair)"; Passage = $spec.Passage; First = $first; Second = $second
             Preferred = $chosen; ChannelsAsExpected = $okChannels
@@ -154,7 +159,7 @@ try {
 }
 finally {
     foreach ($f in $yaml, $cfg) {
-        if ($backups.ContainsKey($f)) { Set-Content $f $backups[$f] -NoNewline } else { Remove-Item $f -ErrorAction SilentlyContinue }
+        if ($backups.ContainsKey($f)) { [IO.File]::WriteAllBytes($f, $backups[$f]) } else { Remove-Item $f -ErrorAction SilentlyContinue }
     }
     $env:HARLETTY_LOG = $oldLog
 }
