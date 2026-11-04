@@ -555,6 +555,10 @@ mod windows_main {
                             Ok(()) => println!("  jumped to {start_s} s"),
                             Err(e) => println!("  could not jump to {start_s} s: {e}"),
                         }
+                        // What played before the jump is not the passage.
+                        if let Some(capture) = &capture {
+                            capture.restart();
+                        }
                     }
                     if listening && !opened {
                         start = Instant::now();

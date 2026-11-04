@@ -45,6 +45,7 @@ pub struct Report {
 
 pub struct Capture {
     stop: Arc<AtomicBool>,
+    restart: Arc<AtomicBool>,
     thread: JoinHandle<Result<Report, String>>,
 }
 
@@ -55,9 +56,21 @@ fn db(mean_square: f64) -> f64 {
 impl Capture {
     pub fn start() -> Capture {
         let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
-        let thread = std::thread::spawn(move || run(&flag));
-        Capture { stop, thread }
+        let restart = Arc::new(AtomicBool::new(false));
+        let (flag, again) = (stop.clone(), restart.clone());
+        let thread = std::thread::spawn(move || run(&flag, &again));
+        Capture {
+            stop,
+            restart,
+            thread,
+        }
+    }
+
+    /// Forget everything heard so far. The probe calls it once the player has
+    /// jumped to the requested position, so the opening of the file that
+    /// played before the jump does not count.
+    pub fn restart(&self) {
+        self.restart.store(true, Ordering::SeqCst);
     }
 
     pub fn finish(self) -> Result<Report, String> {
@@ -74,11 +87,11 @@ enum Sample {
     Int16,
 }
 
-fn run(stop: &AtomicBool) -> Result<Report, String> {
+fn run(stop: &AtomicBool, restart: &AtomicBool) -> Result<Report, String> {
     let e = |what: &str, err: windows::core::Error| format!("{what}: {err}");
     unsafe {
         let com = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
-        let result = capture(stop, &e);
+        let result = capture(stop, restart, &e);
         if com {
             CoUninitialize();
         }
@@ -88,6 +101,7 @@ fn run(stop: &AtomicBool) -> Result<Report, String> {
 
 unsafe fn capture(
     stop: &AtomicBool,
+    restart: &AtomicBool,
     e: &dyn Fn(&str, windows::core::Error) -> String,
 ) -> Result<Report, String> {
     unsafe {
@@ -150,6 +164,12 @@ unsafe fn capture(
         let (mut used_sum, mut used_frames) = (vec![0f64; channels], 0usize);
         let (mut blocks_used, mut blocks_total) = (0usize, 0usize);
         loop {
+            if restart.swap(false, Ordering::SeqCst) {
+                in_block = 0;
+                block_sum.iter_mut().for_each(|s| *s = 0.0);
+                used_sum.iter_mut().for_each(|s| *s = 0.0);
+                (used_frames, blocks_used, blocks_total) = (0, 0, 0);
+            }
             let mut packet = reader
                 .GetNextPacketSize()
                 .map_err(|x| e("packet size", x))?;

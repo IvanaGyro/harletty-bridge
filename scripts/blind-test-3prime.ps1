@@ -64,7 +64,9 @@ function Invoke-Probe([int]$passage, [switch]$Measure) {
 function Get-Level([string]$name, [double]$gain, [int]$passage) {
     Set-Condition $name $gain
     $out = Invoke-Probe $passage -Measure
-    if ($out -match 'loopback: total (-?\d+(\.\d+)?) dBFS') {
+    if ($out -match 'MediaFailed') { throw "The probe could not play the file:`n$out" }
+    if ($out -match 'loopback: total (-?\d+(\.\d+)?) dBFS.*?(\d+) of (\d+) blocks above') {
+        if ([int]$Matches[3] -eq 0) { throw "The capture heard no sound (0 usable blocks):`n$out" }
         return [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)
     }
     throw "No loopback level in the probe's output:`n$out"
@@ -137,7 +139,9 @@ try {
             Set-Condition $second $gain["$second/$($spec.Passage)"]
             Invoke-Probe $spec.Passage | Out-Null
             $playedSecond = Get-Played
-            $answer = Read-Host 'Which would you rather listen to?  1 = first   2 = second   r = replay both'
+            do {
+                $answer = (Read-Host 'Which would you rather listen to?  1 = first   2 = second   r = replay both').Trim().ToLower()
+            } until ($answer -in '1', '2', 'r')
         }
         $chosen = if ($answer -eq '1') { $first } else { $second }
         $okChannels = ($playedFirst.Channels -eq $conditions[$first].Channels) -and ($playedSecond.Channels -eq $conditions[$second].Channels)
