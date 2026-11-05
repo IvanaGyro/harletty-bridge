@@ -26,6 +26,18 @@
 //! file, jumps to that time and plays from there: for `--for` seconds, or to
 //! the end of the file when it is not given (Ctrl-C stops it earlier).
 //!
+//! Forcing a decoder: `--force-dll PATH` loads that `harletty_mf.dll` and
+//! registers it for E-AC-3 and AC-3 in this process only, so it is tried before
+//! the system's own decoders. `codecs:` in `mf.yaml` must list `eac3` and `ac3`.
+//!
+//! Audio track: `--audio-track N` (0-based, in the file's order) plays that
+//! track instead of the default one; the tracks are listed when it is used.
+//!
+//! Level: `mf-player-probe FILE --start S --for N --measure` also records a
+//! WASAPI loopback of the default render endpoint while it plays and prints
+//! `loopback: total X dBFS ...`, the level (RMS of the 100 ms blocks above
+//! -70 dBFS) of what reaches the headphones.
+//!
 //! Everything is printed; nothing here decides anything. The exit code is 0
 //! unless the probe itself fails to run.
 
@@ -43,20 +55,26 @@ fn main() {
 }
 
 #[cfg(windows)]
+mod loopback;
+
+#[cfg(windows)]
 mod windows_main {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     use windows::Foundation::{TimeSpan, TypedEventHandler, Uri};
     use windows::Media::Core::{CodecCategory, CodecKind, CodecQuery, MediaSource};
-    use windows::Media::Playback::{MediaPlayer, MediaPlayerFailedEventArgs};
+    use windows::Media::Playback::{MediaPlaybackItem, MediaPlayer, MediaPlayerFailedEventArgs};
     use windows::Win32::Media::MediaFoundation::*;
-    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
+    use windows::Win32::System::Com::{
+        COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, IClassFactory,
+    };
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::Win32::System::ProcessStatus::{
         EnumProcessModules, GetModuleFileNameExW, GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
-    use windows::core::{GUID, HSTRING, IInspectable, Result};
+    use windows::core::{GUID, HSTRING, IInspectable, Interface, Result, w};
 
     /// The subtypes the plan registers (TrueHD, DTS-HD, DTS, E-AC-3, AC-3).
     const SUBTYPES: [(&str, GUID); 5] = [
@@ -82,6 +100,43 @@ mod windows_main {
         ),
     ];
 
+    /// Register the decoder in `dll` for E-AC-3 and AC-3 in this process only.
+    /// The decoder still has to accept them: `codecs:` in mf.yaml must list
+    /// `eac3` and `ac3`.
+    fn register_local(dll: &str) -> Result<()> {
+        type GetClassObject = unsafe extern "system" fn(
+            *const GUID,
+            *const GUID,
+            *mut *mut std::ffi::c_void,
+        ) -> windows::core::HRESULT;
+        unsafe {
+            let module = LoadLibraryW(&HSTRING::from(dll))?;
+            let get = GetProcAddress(module, windows::core::s!("DllGetClassObject"))
+                .ok_or_else(windows::core::Error::from_thread)?;
+            let get: GetClassObject = std::mem::transmute(get);
+            let clsid = GUID::from_u128(0xAC884ED4_9379_4E5A_BAF6_3365A4F08E38);
+            let mut raw = std::ptr::null_mut();
+            get(&clsid, &IClassFactory::IID, &mut raw).ok()?;
+            let factory = IClassFactory::from_raw(raw);
+            let inputs = [SUBTYPES[3].1, SUBTYPES[4].1].map(|guid| MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Audio,
+                guidSubtype: guid,
+            });
+            let outputs = [MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Audio,
+                guidSubtype: MFAudioFormat_Float,
+            }];
+            MFTRegisterLocal(
+                &factory,
+                &MFT_CATEGORY_AUDIO_DECODER,
+                w!("harletty (local)"),
+                0,
+                Some(&inputs),
+                Some(&outputs),
+            )
+        }
+    }
+
     fn braced(guid: &GUID) -> String {
         let text = format!("{guid:?}");
         format!("{{{}}}", text.trim_matches(|c| c == '{' || c == '}'))
@@ -93,6 +148,20 @@ mod windows_main {
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
         }
         println!("process: {:?}", std::env::current_exe().ok());
+
+        // --force-dll PATH: register that decoder for E-AC-3 and AC-3 in this
+        // process only (MFTRegisterLocal), so it is tried before the system's.
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Some(dll) = args
+            .iter()
+            .position(|a| a == "--force-dll")
+            .and_then(|i| args.get(i + 1))
+        {
+            match register_local(dll) {
+                Ok(()) => println!("registered {dll} for E-AC-3 and AC-3 in this process only"),
+                Err(e) => println!("could not register {dll} locally: {e}"),
+            }
+        }
 
         println!("\n== 1. MFTEnumEx (audio decoders) ==");
         for (name, subtype) in SUBTYPES {
@@ -149,6 +218,12 @@ mod windows_main {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(default)
         };
+        let measure = args.iter().any(|a| a == "--measure");
+        let audio_track = args
+            .iter()
+            .position(|a| a == "--audio-track")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<i32>().ok());
         let (start_at, play_for) = (
             args.iter()
                 .any(|a| a == "--start")
@@ -165,7 +240,18 @@ mod windows_main {
         match args.first().filter(|a| !a.starts_with("--")) {
             Some(file) => {
                 println!("\n== 3. MediaPlayer ({file}) ==");
-                play(file, soak, seek_every, report_every, start_at, play_for)?;
+                play(
+                    file,
+                    &Options {
+                        soak,
+                        seek_every,
+                        report_every,
+                        start_at,
+                        play_for,
+                        measure,
+                        audio_track,
+                    },
+                )?;
                 list_modules();
             }
             None => println!("\n(no file given: skipping the MediaPlayer step)"),
@@ -294,17 +380,62 @@ mod windows_main {
         uri
     }
 
-    fn play(
-        file: &str,
+    /// Print the file's audio tracks, then select track `n`.
+    fn select_track(item: &MediaPlaybackItem, n: i32) {
+        let tracks = match item.AudioTracks() {
+            Ok(tracks) => tracks,
+            Err(e) => {
+                println!("  could not list the audio tracks: {e}");
+                return;
+            }
+        };
+        for (i, track) in tracks.clone().into_iter().enumerate() {
+            let label = track.Label().map(|l| l.to_string()).unwrap_or_default();
+            let (subtype, channels) = track
+                .GetEncodingProperties()
+                .map(|p| {
+                    (
+                        p.Subtype().map(|s| s.to_string()).unwrap_or_default(),
+                        p.ChannelCount().unwrap_or(0),
+                    )
+                })
+                .unwrap_or_default();
+            println!("  audio track {i}: {label} | {subtype} | {channels} ch");
+        }
+        match tracks.SetSelectedIndex(n) {
+            Ok(()) => println!("  selected audio track {n}"),
+            Err(e) => println!("  could not select audio track {n}: {e}"),
+        }
+    }
+
+    /// What the command line asked for.
+    struct Options {
         soak: u64,
         seek_every: u64,
         report_every: u64,
         start_at: Option<u64>,
         play_for: Option<u64>,
-    ) -> Result<()> {
+        measure: bool,
+        audio_track: Option<i32>,
+    }
+
+    fn play(file: &str, options: &Options) -> Result<()> {
+        let Options {
+            soak,
+            seek_every,
+            report_every,
+            start_at,
+            play_for,
+            measure,
+            audio_track,
+        } = *options;
         let path = std::path::absolute(file).unwrap_or_else(|_| file.into());
         let uri = Uri::CreateUri(&HSTRING::from(file_uri(&path.display().to_string())))?;
         let source = MediaSource::CreateFromUri(&uri)?;
+        // A playback item, to choose the audio track (--audio-track N, 0-based).
+        let item = audio_track
+            .map(|_| MediaPlaybackItem::Create(&source))
+            .transpose()?;
         let player = MediaPlayer::new()?;
         let (tx, rx) = mpsc::channel::<String>();
 
@@ -343,7 +474,12 @@ mod windows_main {
         if soak > 0 {
             player.SetIsLoopingEnabled(true)?;
         }
-        player.SetSource(&source)?;
+        // The loopback capture starts first, so it is listening when the sound does.
+        let capture = measure.then(crate::loopback::Capture::start);
+        match &item {
+            Some(item) => player.SetSource(item)?,
+            None => player.SetSource(&source)?,
+        }
         player.Play()?;
 
         let mut start = Instant::now();
@@ -359,6 +495,7 @@ mod windows_main {
         });
         let start_s = start_at.unwrap_or(0);
         let mut seeked = start_s == 0;
+        let mut tracked = false;
         let mut ended = false;
         // A bounded listening (--start with --for) counts its seconds from the
         // moment the file is open and at the requested position, not from Play().
@@ -402,6 +539,14 @@ mod windows_main {
                 if (event == "MediaEnded" || event.starts_with("MediaFailed")) && soak == 0 {
                     ended = true;
                 }
+                if event == "MediaOpened" && !tracked {
+                    tracked = true;
+                    if let (Some(item), Some(n)) = (&item, audio_track) {
+                        select_track(item, n);
+                        // The switch rebuilds the topology: let it settle before jumping.
+                        std::thread::sleep(Duration::from_millis(500));
+                    }
+                }
                 if event == "MediaOpened" {
                     if !seeked {
                         seeked = true;
@@ -409,6 +554,10 @@ mod windows_main {
                         match session.SetPosition(TimeSpan { Duration: to }) {
                             Ok(()) => println!("  jumped to {start_s} s"),
                             Err(e) => println!("  could not jump to {start_s} s: {e}"),
+                        }
+                        // What played before the jump is not the passage.
+                        if let Some(capture) = &capture {
+                            capture.restart();
                         }
                     }
                     if listening && !opened {
@@ -433,6 +582,23 @@ mod windows_main {
         if soak > 0 {
             let (mib, handles) = resources();
             println!("  end: working set {mib:.1} MiB, handles {handles}");
+        }
+        if let Some(capture) = capture {
+            match capture.finish() {
+                Ok(r) => println!(
+                    "loopback: total {:.2} dBFS | per channel {:?} | {} of {} blocks above -70 dBFS | {} Hz, {} channels",
+                    r.total_db,
+                    r.per_channel_db
+                        .iter()
+                        .map(|d| format!("{d:.1}"))
+                        .collect::<Vec<_>>(),
+                    r.blocks_used,
+                    r.blocks_total,
+                    r.rate,
+                    r.channels
+                ),
+                Err(e) => println!("loopback: failed: {e}"),
+            }
         }
         Ok(())
     }

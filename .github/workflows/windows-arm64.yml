@@ -156,6 +156,20 @@ jobs:
           ./scripts/test-mf-install.ps1 -Zip harletty-mf-ci-windows-arm64.zip
         working-directory: harletty-bridge
 
+      # The scripts are run by people on Windows PowerShell 5.1: they must at
+      # least parse there.
+      - name: Parse the PowerShell scripts (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $bad = 0
+          Get-ChildItem scripts, mf-decoder/install -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $bad++; $errors | ForEach-Object { Write-Host "$($_.Extent.File):$($_.Extent.StartLineNumber): $($_.Message)" } }
+          }
+          if ($bad) { throw "$bad script(s) do not parse" }
+        working-directory: harletty-bridge
+
       # For testing on a Windows ARM64 machine: download from the run's page.
       # Named by commit, so artifacts from different pushes do not collide.
       - name: Upload artifacts
